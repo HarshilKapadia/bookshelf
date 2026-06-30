@@ -26,7 +26,7 @@ There's nothing to install on a computer and no account to create — just open 
 On your iPhone or iPad, open **Safari** (this must be Safari — "Add to Home Screen" doesn't fully work in Chrome or other browsers on iOS) and go to:
 
 ```
-[INSERT YOUR LIVE APP URL HERE]
+https://harshilkapadia.github.io/bookshelf/
 ```
 
 ### Step 2 — Add it to your home screen
