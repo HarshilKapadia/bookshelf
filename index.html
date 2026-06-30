@@ -142,6 +142,10 @@
     }
 
     // ── BOOK CARD ──────────────────────────────────────────────────────────────
+    function sortableTitle(title) {
+      return (title||"").replace(/^(the|a|an)\s+/i, "").trim().toLowerCase();
+    }
+
     function lastReadLabel(book) {
       const logs = (book.readLogs||[]).filter(l => l.year);
       if (!logs.length) return null;
@@ -494,7 +498,12 @@
           });
         }
         return [...books].sort((a,b)=>{
-          if (sortBy==="title") return a.title.localeCompare(b.title);
+          if (sortBy==="title") return sortableTitle(a.title).localeCompare(sortableTitle(b.title));
+          if (sortBy==="author") {
+            const aName = db.authors.find(au=>(a.authorIds||[])[0]===au.id)?.name || "";
+            const bName = db.authors.find(au=>(b.authorIds||[])[0]===au.id)?.name || "";
+            return aName.localeCompare(bName);
+          }
           if (sortBy==="rating") return (b.rating||0)-(a.rating||0);
           if (sortBy==="year") {
             const ay=Math.max(...(a.readLogs||[]).map(l=>+l.year||0),0);
@@ -543,7 +552,7 @@
                 background:T.card, fontSize:11, fontWeight:600, color:T.textMid, cursor:"pointer" }}>⇅ Sort</button>
             {showSort && <div style={{ position:"absolute", right:0, top:34, background:T.card,
               border:`1px solid ${T.border}`, borderRadius:8, boxShadow:"0 4px 16px rgba(0,0,0,0.1)", zIndex:10, minWidth:140 }}>
-              {[["title","Title A–Z"],["rating","Highest Rated"],["year","Most Recent"]].map(([k,l])=>(
+              {[["title","Title A–Z"],["author","Author A–Z"],["rating","Highest Rated"],["year","Most Recent"]].map(([k,l])=>(
                 <div key={k} onClick={()=>{setSortBy(k);setShowSort(false);}}
                   style={{ padding:"9px 14px", fontSize:12, color:sortBy===k?T.accent:T.textMid,
                     cursor:"pointer", fontWeight:sortBy===k?600:400, background:sortBy===k?"#EFF6FF":"transparent" }}>{l}</div>
