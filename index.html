@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="Bookshelf" />
+  <meta name="apple-mobile-web-app-title" content="Bibliotheca" />
   <meta name="theme-color" content="#1A1A2E" />
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icon-192.png" />
-  <title>Bookshelf</title>
+  <title>Bibliotheca</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Inter:wght@400;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:wght@500;700&family=Inter:wght@400;600&display=swap" rel="stylesheet" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; overflow: hidden; }
@@ -60,8 +60,9 @@
       "Ebook":      { color: "#7C3AED", bg: "#F5F3FF", border: "#C4B5FD" },
       "Audiobook":  { color: "#DB2777", bg: "#FDF2F8", border: "#F9A8D4" },
     };
-    const SPINE_COLORS = ["#2563EB","#7C3AED","#059669","#DC2626","#D97706","#0891B2","#DB2777","#0D9488","#EA580C","#4F46E5"];
-    const GENRE_COLORS = ["#2563EB","#7C3AED","#059669","#D97706","#0891B2","#DB2777","#DC2626","#0D9488"];
+    const SPINE_COLOR = "#1A1A2E"; // uniform theme spine for every card
+    const GENRE_PALETTE = ["#2563EB","#7C3AED","#059669","#D97706","#0891B2","#DB2777","#DC2626","#0D9488","#4F46E5","#EA580C"];
+    const GENRE_COLOR_MAP = {}; // genre name -> color, assigned once and reused
     const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     const MONTHS_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
@@ -72,11 +73,14 @@
     function saveDB(db) { try { localStorage.setItem(LS_KEY, JSON.stringify(db)); } catch {} }
 
     // ── HELPERS ────────────────────────────────────────────────────────────────
-    function spineColor(id) { return SPINE_COLORS[(parseInt((id||"b_0").split("_")[1]||0) - 1 + SPINE_COLORS.length) % SPINE_COLORS.length]; }
+    function spineColor(id) { return SPINE_COLOR; }
     function genreColor(genre) {
       if (!genre) return T.muted;
-      let h = 0; for (let i = 0; i < genre.length; i++) h = genre.charCodeAt(i) + ((h << 5) - h);
-      return GENRE_COLORS[Math.abs(h) % GENRE_COLORS.length];
+      if (!GENRE_COLOR_MAP[genre]) {
+        const used = Object.keys(GENRE_COLOR_MAP).length;
+        GENRE_COLOR_MAP[genre] = GENRE_PALETTE[used % GENRE_PALETTE.length];
+      }
+      return GENRE_COLOR_MAP[genre];
     }
 
     // ── SMALL COMPONENTS ───────────────────────────────────────────────────────
@@ -138,35 +142,63 @@
     }
 
     // ── BOOK CARD ──────────────────────────────────────────────────────────────
+    function lastReadLabel(book) {
+      const logs = (book.readLogs||[]).filter(l => l.year);
+      if (!logs.length) return null;
+      const sorted = [...logs].sort((a,b)=>{
+        const ay = +a.year, by = +b.year;
+        if (ay !== by) return by - ay;
+        return (+b.month||0) - (+a.month||0);
+      });
+      const latest = sorted[0];
+      return latest.month ? `${MONTHS[latest.month-1]} ${latest.year}` : `${latest.year}`;
+    }
+
     function BookCard({ book, authors, onClick }) {
       const sc = STATUS_COLORS[book.status] || { color:T.muted, bg:T.surface, border:T.border };
       const bookAuthors = authors.filter(a => (book.authorIds||[]).includes(a.id));
+      const lastRead = lastReadLabel(book);
+      const primaryFormat = (book.readLogs||[]).find(l=>l.format)?.format;
+      const fc = primaryFormat ? (FORMAT_COLORS[primaryFormat]||{color:T.muted}) : null;
+
       return (
-        <div onClick={onClick} style={{ display:"flex", background:T.card, border:`1px solid ${T.border}`,
-          borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,0.05)", cursor:"pointer" }}>
-          <div style={{ width:5, background:spineColor(book.id), flexShrink:0 }} />
-          <div style={{ padding:"13px 14px", flex:1, minWidth:0 }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8 }}>
-              <div style={{ minWidth:0 }}>
-                <div style={{ fontFamily:"'Playfair Display',serif", fontSize:15, fontWeight:700,
-                  color:T.textDark, lineHeight:1.3, wordBreak:"break-word" }}>{book.title}</div>
-                <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>
-                  {bookAuthors.map(a=>a.name).join(", ") || "Unknown author"}
+        <div onClick={onClick} style={{ display:"flex", flexDirection:"column", background:T.card,
+          border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden",
+          boxShadow:"0 1px 4px rgba(0,0,0,0.05)", cursor:"pointer", height:"100%" }}>
+          <div style={{ display:"flex", flex:1 }}>
+            <div style={{ width:5, background:spineColor(book.id), flexShrink:0 }} />
+            <div style={{ padding:"13px 14px", flex:1, minWidth:0, display:"flex", flexDirection:"column" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8 }}>
+                <div style={{ minWidth:0, flex:1 }}>
+                  <div style={{ fontFamily:"'EB Garamond',serif", fontSize:17, fontWeight:700,
+                    color:T.textDark, lineHeight:1.3, wordBreak:"break-word" }}>{book.title}</div>
+                  <div style={{ fontSize:12, color:T.muted, marginTop:3 }}>
+                    {bookAuthors.map(a=>a.name).join(", ") || "Unknown author"}
+                  </div>
+                </div>
+                {/* Right column: status stacked above format */}
+                <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:5, flexShrink:0 }}>
+                  <Badge label={book.status} {...sc} size={10} />
+                  {fc && <Badge label={primaryFormat} color={fc.color} bg={fc.bg} border={fc.border} size={9} />}
                 </div>
               </div>
-              <Badge label={book.status} {...sc} size={10} />
-            </div>
-            <div style={{ display:"flex", gap:5, marginTop:9, flexWrap:"wrap", alignItems:"center" }}>
-              {book.genre && <Tag label={book.genre.toUpperCase()} color={genreColor(book.genre)} />}
-              {book.owned && <Tag label="OWNED" color="#059669" />}
-              {book.borrowed && <Tag label="BORROWED" color="#D97706" />}
-              {(book.readLogs||[]).map((log,i) => {
-                const fc = FORMAT_COLORS[log.format]||{color:T.muted};
-                return <Tag key={i} label={(log.format||"").toUpperCase()} color={fc.color} />;
-              })}
-              {book.rating > 0 && <Stars rating={book.rating} />}
+
+              {/* Left side: genre tags only */}
+              <div style={{ display:"flex", gap:5, marginTop:10, flexWrap:"wrap", alignItems:"center", flex:1 }}>
+                {book.genre && <Tag label={book.genre.toUpperCase()} color={genreColor(book.genre)} />}
+                {book.owned && <Tag label="OWNED" color="#059669" />}
+                {book.borrowed && <Tag label="BORROWED" color="#D97706" />}
+                {book.rating > 0 && <Stars rating={book.rating} size={12} />}
+              </div>
             </div>
           </div>
+          {/* Footer: last read */}
+          {lastRead && (
+            <div style={{ borderTop:`1px solid ${T.border}`, padding:"6px 14px",
+              fontSize:10, color:T.muted, fontFamily:"Inter, sans-serif", letterSpacing:"0.03em" }}>
+              Last read · {lastRead}
+            </div>
+          )}
         </div>
       );
     }
@@ -219,7 +251,7 @@
             {/* Header */}
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
               padding:"8px 20px 14px", borderBottom:`1px solid ${T.border}` }}>
-              <div style={{ fontFamily:"'Playfair Display',serif", fontSize:18, fontWeight:700, color:T.textDark }}>
+              <div style={{ fontFamily:"'EB Garamond',serif", fontSize:18, fontWeight:700, color:T.textDark }}>
                 {editing ? (book.id?"Edit Book":"Add Book") : "Book Details"}
               </div>
               <div style={{ display:"flex", gap:8 }}>
@@ -383,7 +415,7 @@
                   <div style={{ display:"flex", gap:12, alignItems:"flex-start", marginBottom:16 }}>
                     <div style={{ width:6, alignSelf:"stretch", borderRadius:3, background:spineColor(book.id), flexShrink:0 }} />
                     <div>
-                      <div style={{ fontFamily:"'Playfair Display',serif", fontSize:22, fontWeight:700,
+                      <div style={{ fontFamily:"'EB Garamond',serif", fontSize:22, fontWeight:700,
                         color:T.textDark, lineHeight:1.3 }}>{book.title}</div>
                       <div style={{ fontSize:14, color:T.muted, marginTop:4 }}>
                         {allAuthors.filter(a=>(book.authorIds||[]).includes(a.id)).map(a=>a.name).join(", ")}
@@ -537,7 +569,7 @@
             <div style={{ fontSize:13 }}>Try adjusting your search or filters</div>
           </div>
         ) : (
-          <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             {filtered.map(book=><BookCard key={book.id} book={book} authors={db.authors} onClick={()=>onSelectBook(book)} />)}
           </div>
         )}
@@ -591,7 +623,7 @@
       return <div>
         {/* Year selector */}
         <div style={{ display:"flex", gap:7, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
-          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:18, fontWeight:700, color:T.textDark, marginRight:4 }}>
+          <div style={{ fontFamily:"'EB Garamond',serif", fontSize:18, fontWeight:700, color:T.textDark, marginRight:4 }}>
             Stats for
           </div>
           {years.length===0
@@ -616,7 +648,7 @@
           ].map(s=>(
             <div key={s.label} style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 16px" }}>
               <div style={{ fontSize:10, fontWeight:600, color:T.muted, letterSpacing:"0.07em", marginBottom:4 }}>{s.label.toUpperCase()}</div>
-              <div style={{ fontFamily:"'Playfair Display',serif", fontSize:30, fontWeight:700, color:s.color, lineHeight:1 }}>{s.value}</div>
+              <div style={{ fontFamily:"'EB Garamond',serif", fontSize:30, fontWeight:700, color:s.color, lineHeight:1 }}>{s.value}</div>
               <div style={{ fontSize:10, color:T.muted, marginTop:4 }}>{s.sub}</div>
             </div>
           ))}
@@ -625,7 +657,7 @@
         {/* Books per year */}
         {booksPerYear.length>0 && <div style={{ background:T.card, border:`1px solid ${T.border}`,
           borderRadius:10, padding:16, marginBottom:14 }}>
-          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:14 }}>Books per Year</div>
+          <div style={{ fontFamily:"'EB Garamond',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:14 }}>Books per Year</div>
           <div style={{ display:"flex", alignItems:"flex-end", gap:10, height:90 }}>
             {booksPerYear.map(d=>(
               <div key={d.year} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
@@ -644,7 +676,7 @@
         {/* Format breakdown */}
         {totalFormats>0 && <div style={{ background:T.card, border:`1px solid ${T.border}`,
           borderRadius:10, padding:16, marginBottom:14 }}>
-          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:4 }}>Format Breakdown</div>
+          <div style={{ fontFamily:"'EB Garamond',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:4 }}>Format Breakdown</div>
           <div style={{ fontSize:11, color:T.muted, marginBottom:12 }}>{selectedYear}</div>
           <div style={{ display:"flex", borderRadius:6, overflow:"hidden", height:12, marginBottom:14 }}>
             {Object.entries(formatCounts).map(([f,c])=>{
@@ -665,7 +697,7 @@
 
         {/* Monthly grid */}
         <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:10, padding:16, marginBottom:14 }}>
-          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:4 }}>Monthly Detail</div>
+          <div style={{ fontFamily:"'EB Garamond',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:4 }}>Monthly Detail</div>
           <div style={{ fontSize:11, color:T.muted, marginBottom:12 }}>Tap a month for details</div>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:7 }}>
             {monthlyData.map(m=>{
@@ -675,7 +707,7 @@
                   background:isSel?T.accent:!m.hasData?T.surface:T.base,
                   border:`1px solid ${isSel?T.accent:T.border}` }}>
                 <div style={{ fontSize:10, color:isSel?"#FFF":!m.hasData?T.muted:"#94A3B8" }}>{m.month}</div>
-                <div style={{ fontFamily:"'Playfair Display',serif", fontSize:18, fontWeight:700,
+                <div style={{ fontFamily:"'EB Garamond',serif", fontSize:18, fontWeight:700,
                   color:isSel?"#FFF":!m.hasData?T.muted:T.navText }}>
                   {!m.hasData?"—":m.count}
                 </div>
@@ -687,7 +719,7 @@
         {/* Month detail */}
         {selectedMonth && <div style={{ background:T.card, border:`1px solid ${T.border}`,
           borderRadius:10, padding:16, marginBottom:14 }}>
-          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:12 }}>
+          <div style={{ fontFamily:"'EB Garamond',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:12 }}>
             {MONTHS_FULL[selectedMonth-1]} {selectedYear}
           </div>
           {!hasMonthData
@@ -700,7 +732,7 @@
                       padding:"10px 12px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:8 }}>
                       <div style={{ width:4, height:36, borderRadius:2, background:spineColor(book.id), flexShrink:0 }} />
                       <div style={{ flex:1 }}>
-                        <div style={{ fontFamily:"'Playfair Display',serif", fontSize:13, fontWeight:700, color:T.textDark }}>{book.title}</div>
+                        <div style={{ fontFamily:"'EB Garamond',serif", fontSize:13, fontWeight:700, color:T.textDark }}>{book.title}</div>
                         <div style={{ fontSize:11, color:T.muted, marginTop:2 }}>
                           {db.authors.filter(a=>(book.authorIds||[]).includes(a.id)).map(a=>a.name).join(", ")}
                         </div>
@@ -714,7 +746,7 @@
 
         {/* Ratings distribution */}
         {ratedBooks>0 && <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:10, padding:16 }}>
-          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:12 }}>Ratings Distribution</div>
+          <div style={{ fontFamily:"'EB Garamond',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:12 }}>Ratings Distribution</div>
           {ratingDist.map(({rating,count})=>(
             <div key={rating} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
               <Stars rating={rating} size={12} />
@@ -795,7 +827,7 @@
                 return <div key={author.id} style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 16px" }}>
                   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom: books.length?10:0 }}>
                     <div>
-                      <div style={{ fontFamily:"'Playfair Display',serif", fontSize:16, fontWeight:700, color:T.textDark }}>{author.name}</div>
+                      <div style={{ fontFamily:"'EB Garamond',serif", fontSize:16, fontWeight:700, color:T.textDark }}>{author.name}</div>
                       <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>{books.length} {books.length===1?"book":"books"} · {readCount} read</div>
                     </div>
                     {readCount>0 && <Badge label={`${readCount} READ`} color="#059669" bg="#ECFDF5" border="#6EE7B7" size={10} />}
@@ -900,21 +932,21 @@
         showToast("All data cleared","info");
       }
 
-      const NAV=[{key:"Library",icon:"📚"},{key:"Dashboard",icon:"📊"},{key:"Add",icon:"＋"},{key:"Authors",icon:"✍️"}];
+      const NAV=[{key:"Stacks",label:"Stacks"},{key:"Almanac",label:"Almanac"},{key:"Acquire",label:"Acquire"},{key:"Scribes",label:"Scribes"}];
 
       return <div style={{ height:"100vh", display:"flex", flexDirection:"column", background:T.surface }}>
         {/* Header */}
         <div style={{ background:T.base, padding:"14px 20px 12px", flexShrink:0,
           paddingTop:"max(14px, env(safe-area-inset-top))" }}>
-          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:22, color:T.navText }}>Bookshelf</div>
+          <div style={{ fontFamily:"'EB Garamond',serif", fontSize:26, fontWeight:700, color:T.navText, letterSpacing:"0.01em" }}>Bibliotheca</div>
           <div style={{ fontSize:11, color:T.muted, marginTop:2 }}>{db.books.length} books tracked</div>
         </div>
 
         {/* Scrollable body */}
         <div style={{ flex:1, overflowY:"auto", padding:"18px 16px 20px" }}>
-          {nav==="Library"   && <LibraryScreen db={db} onSelectBook={setSelectedBook} />}
-          {nav==="Dashboard" && <DashboardScreen db={db} />}
-          {nav==="Authors"   && <AuthorsScreen db={db} onSelectBook={setSelectedBook}
+          {nav==="Stacks"   && <LibraryScreen db={db} onSelectBook={setSelectedBook} />}
+          {nav==="Almanac"  && <DashboardScreen db={db} />}
+          {nav==="Scribes"  && <AuthorsScreen db={db} onSelectBook={setSelectedBook}
             onImport={importData} onExport={exportData} onReset={resetData} />}
         </div>
 
@@ -924,17 +956,19 @@
           borderTop:"1px solid rgba(255,255,255,0.07)" }}>
           <div style={{ display:"flex" }}>
             {NAV.map(item=>{
-              const isAdd=item.key==="Add";
+              const isAdd=item.key==="Acquire";
               const active=!isAdd&&nav===item.key;
               return <button key={item.key}
                 onClick={()=>isAdd?setShowAdd(true):setNav(item.key)}
-                style={{ flex:1, padding:"12px 4px 10px", border:"none",
-                  background:isAdd?T.accent:"transparent", cursor:"pointer",
-                  display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}>
-                <span style={{ fontSize:isAdd?22:18 }}>{item.icon}</span>
-                <span style={{ fontSize:9, fontWeight:600, letterSpacing:"0.05em",
-                  color:active||isAdd?"#FFF":"rgba(255,255,255,0.35)" }}>{item.key.toUpperCase()}</span>
-                {active && <div style={{ width:16, height:2, borderRadius:1, background:T.accent }} />}
+                style={{ flex:1, padding:"14px 4px 12px", border:"none",
+                  background:"transparent", cursor:"pointer",
+                  display:"flex", flexDirection:"column", alignItems:"center", gap:6 }}>
+                <span style={{ fontFamily:"'EB Garamond',serif", fontSize:13, fontWeight:active||isAdd?700:400,
+                  letterSpacing:"0.06em", fontStyle: isAdd?"italic":"normal",
+                  color:active||isAdd?"#FFF":"rgba(255,255,255,0.45)" }}>{item.label}</span>
+                <div style={{ width:active?14:4, height:4, borderRadius:2,
+                  background:active?T.accent:isAdd?"rgba(255,255,255,0.3)":"transparent",
+                  transition:"width 0.2s" }} />
               </button>;
             })}
           </div>
