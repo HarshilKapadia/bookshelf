@@ -730,16 +730,57 @@
     }
 
     // ── AUTHORS ────────────────────────────────────────────────────────────────
-    function AuthorsScreen({ db, onSelectBook }) {
+    function AuthorsScreen({ db, onSelectBook, onImport, onExport, onReset }) {
       const [search, setSearch] = useState("");
+      const [showTools, setShowTools] = useState(false);
       const filtered = db.authors.filter(a=>a.name.toLowerCase().includes(search.toLowerCase()));
+      const fileInputRef = useRef(null);
 
       return <div>
         <div style={{ display:"flex", alignItems:"center", gap:10, background:T.card,
-          border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 14px", marginBottom:16 }}>
+          border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 14px", marginBottom:12 }}>
           <span style={{ color:T.muted, fontSize:16 }}>🔍</span>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search authors…"
             style={{ flex:1, border:"none", outline:"none", fontSize:14, color:T.textDark, background:"transparent" }} />
+        </div>
+
+        {/* Data tools */}
+        <div style={{ marginBottom:16 }}>
+          <button onClick={()=>setShowTools(s=>!s)}
+            style={{ width:"100%", padding:"9px 14px", borderRadius:8, border:`1px solid ${T.border}`,
+              background:T.card, fontSize:12, fontWeight:600, color:T.textMid, cursor:"pointer",
+              display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <span>⚙️ Data Tools (Import / Export)</span>
+            <span>{showTools?"▲":"▼"}</span>
+          </button>
+          {showTools && (
+            <div style={{ background:T.card, border:`1px solid ${T.border}`, borderTop:"none",
+              borderRadius:"0 0 8px 8px", padding:14, display:"flex", flexDirection:"column", gap:8 }}>
+              <input ref={fileInputRef} type="file" accept="application/json" style={{ display:"none" }}
+                onChange={e=>{
+                  const file = e.target.files[0];
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onload = ev => {
+                    try {
+                      const json = JSON.parse(ev.target.result);
+                      onImport(json);
+                    } catch (err) {
+                      alert("Invalid file. Please select a valid Bookshelf JSON export.");
+                    }
+                  };
+                  reader.readAsText(file);
+                  e.target.value = "";
+                }} />
+              <Btn variant="accent" onClick={()=>fileInputRef.current.click()}>📥 Import from JSON file</Btn>
+              <Btn variant="secondary" onClick={onExport}>📤 Export library to JSON</Btn>
+              <Btn variant="danger" onClick={onReset}>🗑️ Reset all data</Btn>
+              <div style={{ fontSize:11, color:T.muted, lineHeight:1.5 }}>
+                Import replaces your entire library with the contents of the file.
+                Export downloads a backup you can re-import later or move to another device.
+              </div>
+            </div>
+          )}
         </div>
         {filtered.length===0
           ? <div style={{ textAlign:"center", padding:"50px 20px", color:T.muted }}>
@@ -825,6 +866,40 @@
         showToast("Book deleted","info");
       }
 
+      function importData(json) {
+        if (!json || !Array.isArray(json.books) || !Array.isArray(json.authors)) {
+          alert("This file doesn't look like a valid Bookshelf export.");
+          return;
+        }
+        if (!window.confirm(`This will REPLACE your current library (${db.books.length} books) with ${json.books.length} books from the file. Continue?`)) return;
+        setDb({
+          authors: json.authors,
+          books: json.books,
+          nextAuthorId: json.nextAuthorId || (json.authors.length + 1),
+          nextBookId: json.nextBookId || (json.books.length + 1),
+        });
+        showToast(`Imported ${json.books.length} books!`);
+      }
+
+      function exportData() {
+        const blob = new Blob([JSON.stringify(db, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `bookshelf-backup-${new Date().toISOString().slice(0,10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast("Library exported!");
+      }
+
+      function resetData() {
+        if (!window.confirm("This will DELETE all books and authors permanently. Are you sure?")) return;
+        setDb(EMPTY_DB);
+        showToast("All data cleared","info");
+      }
+
       const NAV=[{key:"Library",icon:"📚"},{key:"Dashboard",icon:"📊"},{key:"Add",icon:"＋"},{key:"Authors",icon:"✍️"}];
 
       return <div style={{ height:"100vh", display:"flex", flexDirection:"column", background:T.surface }}>
@@ -839,7 +914,8 @@
         <div style={{ flex:1, overflowY:"auto", padding:"18px 16px 20px" }}>
           {nav==="Library"   && <LibraryScreen db={db} onSelectBook={setSelectedBook} />}
           {nav==="Dashboard" && <DashboardScreen db={db} />}
-          {nav==="Authors"   && <AuthorsScreen db={db} onSelectBook={setSelectedBook} />}
+          {nav==="Authors"   && <AuthorsScreen db={db} onSelectBook={setSelectedBook}
+            onImport={importData} onExport={exportData} onReset={resetData} />}
         </div>
 
         {/* Bottom nav */}
