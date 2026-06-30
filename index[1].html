@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Bookshelf" />
+  <meta name="theme-color" content="#1A1A2E" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <title>Bookshelf</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Inter:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow: hidden; }
+    body { font-family: Inter, sans-serif; background: #F8F9FA; }
+    #root { height: 100%; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 2px; }
+    input, select, textarea { font-family: Inter, sans-serif; }
+    @keyframes fadeInDown {
+      from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+      to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+    @keyframes slideUp {
+      from { transform: translateY(100%); }
+      to   { transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+    // ── DESIGN TOKENS ──────────────────────────────────────────────────────────
+    const T = {
+      base: "#1A1A2E", surface: "#F8F9FA", card: "#FFFFFF",
+      accent: "#2563EB", muted: "#94A3B8", border: "#E2E8F0",
+      textDark: "#0F172A", textMid: "#475569", navText: "#FFFFFF", error: "#EF4444",
+    };
+
+    const STATUS_COLORS = {
+      "Read":              { color: "#059669", bg: "#ECFDF5", border: "#6EE7B7" },
+      "Currently Reading": { color: "#D97706", bg: "#FFFBEB", border: "#FCD34D" },
+      "Want to Read":      { color: "#7C3AED", bg: "#F5F3FF", border: "#C4B5FD" },
+    };
+    const FORMAT_COLORS = {
+      "Paperback":  { color: "#0891B2", bg: "#ECFEFF", border: "#67E8F9" },
+      "Hardcover":  { color: "#0D9488", bg: "#F0FDFA", border: "#5EEAD4" },
+      "Ebook":      { color: "#7C3AED", bg: "#F5F3FF", border: "#C4B5FD" },
+      "Audiobook":  { color: "#DB2777", bg: "#FDF2F8", border: "#F9A8D4" },
+    };
+    const SPINE_COLORS = ["#2563EB","#7C3AED","#059669","#DC2626","#D97706","#0891B2","#DB2777","#0D9488","#EA580C","#4F46E5"];
+    const GENRE_COLORS = ["#2563EB","#7C3AED","#059669","#D97706","#0891B2","#DB2777","#DC2626","#0D9488"];
+    const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const MONTHS_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+    // ── STORAGE ────────────────────────────────────────────────────────────────
+    const LS_KEY = "bookshelf_v1";
+    const EMPTY_DB = { authors: [], books: [], nextAuthorId: 1, nextBookId: 1 };
+    function loadDB() { try { const r = localStorage.getItem(LS_KEY); return r ? JSON.parse(r) : EMPTY_DB; } catch { return EMPTY_DB; } }
+    function saveDB(db) { try { localStorage.setItem(LS_KEY, JSON.stringify(db)); } catch {} }
+
+    // ── HELPERS ────────────────────────────────────────────────────────────────
+    function spineColor(id) { return SPINE_COLORS[(parseInt((id||"b_0").split("_")[1]||0) - 1 + SPINE_COLORS.length) % SPINE_COLORS.length]; }
+    function genreColor(genre) {
+      if (!genre) return T.muted;
+      let h = 0; for (let i = 0; i < genre.length; i++) h = genre.charCodeAt(i) + ((h << 5) - h);
+      return GENRE_COLORS[Math.abs(h) % GENRE_COLORS.length];
+    }
+
+    // ── SMALL COMPONENTS ───────────────────────────────────────────────────────
+    function Badge({ label, color, bg, border, size=11 }) {
+      return <span style={{ fontSize:size, fontWeight:600, letterSpacing:"0.04em", color, background:bg,
+        border:`1px solid ${border||color}`, padding:"2px 8px", borderRadius:20, whiteSpace:"nowrap" }}>{label}</span>;
+    }
+    function Tag({ label, color }) {
+      return <span style={{ fontSize:10, fontWeight:600, letterSpacing:"0.05em", color,
+        border:`1px solid ${color}55`, padding:"1px 7px", borderRadius:4 }}>{label}</span>;
+    }
+    function Stars({ rating, onSet, size=14 }) {
+      const [hover, setHover] = useState(0);
+      return <span style={{ fontSize:size, letterSpacing:2, cursor:onSet?"pointer":"default" }}>
+        {[1,2,3,4,5].map(i => <span key={i}
+          onMouseEnter={()=>onSet&&setHover(i)} onMouseLeave={()=>onSet&&setHover(0)}
+          onClick={()=>onSet&&onSet(i===rating?0:i)}
+          style={{ color: i<=(hover||rating||0) ? "#F59E0B" : T.border }}>★</span>)}
+      </span>;
+    }
+    function Toggle({ value, onChange, label }) {
+      return <div onClick={()=>onChange(!value)} style={{ display:"flex", alignItems:"center",
+        justifyContent:"space-between", background:T.card, border:`1px solid ${T.border}`,
+        borderRadius:8, padding:"11px 14px", cursor:"pointer", userSelect:"none" }}>
+        <span style={{ fontSize:13, color:T.textMid }}>{label}</span>
+        <div style={{ width:38, height:22, borderRadius:11, background:value?T.accent:T.border,
+          position:"relative", transition:"background 0.2s", flexShrink:0 }}>
+          <div style={{ position:"absolute", top:3, left:value?19:3, width:16, height:16,
+            borderRadius:"50%", background:"#FFF", boxShadow:"0 1px 3px rgba(0,0,0,0.2)", transition:"left 0.2s" }} />
+        </div>
+      </div>;
+    }
+    function Btn({ children, onClick, variant="primary", size="md", disabled }) {
+      const styles = {
+        primary:   { background:T.base,    color:T.navText, border:"none" },
+        secondary: { background:T.card,    color:T.textMid, border:`1px solid ${T.border}` },
+        danger:    { background:"#FEF2F2", color:T.error,   border:"1px solid #FECACA" },
+        accent:    { background:T.accent,  color:"#FFF",    border:"none" },
+      };
+      const sizes = { sm:{padding:"6px 14px",fontSize:12}, md:{padding:"10px 18px",fontSize:13}, lg:{padding:"13px 20px",fontSize:14} };
+      return <button onClick={onClick} disabled={disabled} style={{ ...styles[variant], ...sizes[size],
+        borderRadius:8, cursor:disabled?"not-allowed":"pointer", fontWeight:600, letterSpacing:"0.04em",
+        opacity:disabled?0.5:1 }}>{children}</button>;
+    }
+    function FieldLabel({ label, required }) {
+      return <div style={{ fontSize:11, fontWeight:600, color:T.textMid, letterSpacing:"0.06em", marginBottom:5 }}>
+        {label.toUpperCase()}{required && <span style={{ color:T.error }}> *</span>}
+      </div>;
+    }
+    function inputStyle(err) {
+      return { width:"100%", padding:"10px 12px", border:`1px solid ${err?T.error:T.border}`,
+        borderRadius:8, fontSize:14, color:T.textDark, outline:"none", background:T.card };
+    }
+    function selectStyle() {
+      return { width:"100%", padding:"10px 12px", border:`1px solid ${T.border}`,
+        borderRadius:8, fontSize:14, color:T.textDark, outline:"none", background:T.card,
+        appearance:"none", backgroundImage:"url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394A3B8' d='M6 8L1 3h10z'/%3E%3C/svg%3E\")",
+        backgroundRepeat:"no-repeat", backgroundPosition:"right 12px center" };
+    }
+
+    // ── BOOK CARD ──────────────────────────────────────────────────────────────
+    function BookCard({ book, authors, onClick }) {
+      const sc = STATUS_COLORS[book.status] || { color:T.muted, bg:T.surface, border:T.border };
+      const bookAuthors = authors.filter(a => (book.authorIds||[]).includes(a.id));
+      return (
+        <div onClick={onClick} style={{ display:"flex", background:T.card, border:`1px solid ${T.border}`,
+          borderRadius:10, overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,0.05)", cursor:"pointer" }}>
+          <div style={{ width:5, background:spineColor(book.id), flexShrink:0 }} />
+          <div style={{ padding:"13px 14px", flex:1, minWidth:0 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8 }}>
+              <div style={{ minWidth:0 }}>
+                <div style={{ fontFamily:"'Playfair Display',serif", fontSize:15, fontWeight:700,
+                  color:T.textDark, lineHeight:1.3, wordBreak:"break-word" }}>{book.title}</div>
+                <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>
+                  {bookAuthors.map(a=>a.name).join(", ") || "Unknown author"}
+                </div>
+              </div>
+              <Badge label={book.status} {...sc} size={10} />
+            </div>
+            <div style={{ display:"flex", gap:5, marginTop:9, flexWrap:"wrap", alignItems:"center" }}>
+              {book.genre && <Tag label={book.genre.toUpperCase()} color={genreColor(book.genre)} />}
+              {book.owned && <Tag label="OWNED" color="#059669" />}
+              {book.borrowed && <Tag label="BORROWED" color="#D97706" />}
+              {(book.readLogs||[]).map((log,i) => {
+                const fc = FORMAT_COLORS[log.format]||{color:T.muted};
+                return <Tag key={i} label={(log.format||"").toUpperCase()} color={fc.color} />;
+              })}
+              {book.rating > 0 && <Stars rating={book.rating} />}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ── BOOK SHEET ─────────────────────────────────────────────────────────────
+    function BookSheet({ book, allAuthors, onClose, onSave, onDelete }) {
+      const isNew = !book.id;
+      const [editing, setEditing] = useState(isNew);
+      const [form, setForm] = useState({
+        title: book.title||"", authorIds: book.authorIds||[], genre: book.genre||"",
+        status: book.status||"Want to Read", owned: book.owned||false, borrowed: book.borrowed||false,
+        rating: book.rating||0, notes: book.notes||"", readLogs: book.readLogs?.length ? book.readLogs : [],
+      });
+      const [authorSearch, setAuthorSearch] = useState("");
+      const [errors, setErrors] = useState({});
+      const sheetRef = useRef(null);
+
+      const bookAuthors = allAuthors.filter(a => form.authorIds.includes(a.id));
+      const filteredAuthors = allAuthors.filter(a =>
+        !form.authorIds.includes(a.id) && a.name.toLowerCase().includes(authorSearch.toLowerCase())
+      );
+
+      const sf = (k,v) => setForm(f=>({...f,[k]:v}));
+
+      function validate() {
+        const e = {};
+        if (!form.title.trim()) e.title = "Title is required";
+        if (!form.authorIds.length) e.authors = "At least one author is required";
+        form.readLogs.forEach((log,i) => {
+          if (!log.year) e[`log_${i}_year`] = "Year required";
+          if (log.year && (isNaN(log.year)||log.year<1000||log.year>2100)) e[`log_${i}_year`] = "Invalid year";
+        });
+        setErrors(e);
+        return !Object.keys(e).length;
+      }
+
+      function handleSave() { if (validate()) onSave({...book,...form}); }
+
+      const sc = STATUS_COLORS[form.status]||{color:T.muted,bg:T.surface,border:T.border};
+
+      return (
+        <div style={{ position:"fixed", inset:0, zIndex:100, display:"flex", flexDirection:"column" }}>
+          <div onClick={onClose} style={{ flex:1, background:"rgba(0,0,0,0.45)" }} />
+          <div ref={sheetRef} style={{ background:T.surface, borderRadius:"16px 16px 0 0",
+            maxHeight:"90vh", overflowY:"auto", animation:"slideUp 0.25s ease" }}>
+            {/* Handle */}
+            <div style={{ display:"flex", justifyContent:"center", padding:"12px 0 4px" }}>
+              <div style={{ width:36, height:4, borderRadius:2, background:T.border }} />
+            </div>
+            {/* Header */}
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
+              padding:"8px 20px 14px", borderBottom:`1px solid ${T.border}` }}>
+              <div style={{ fontFamily:"'Playfair Display',serif", fontSize:18, fontWeight:700, color:T.textDark }}>
+                {editing ? (book.id?"Edit Book":"Add Book") : "Book Details"}
+              </div>
+              <div style={{ display:"flex", gap:8 }}>
+                {!editing && book.id && <>
+                  <Btn onClick={()=>setEditing(true)} variant="secondary" size="sm">Edit</Btn>
+                  <Btn onClick={onDelete} variant="danger" size="sm">Delete</Btn>
+                </>}
+                <Btn onClick={onClose} variant="secondary" size="sm">✕</Btn>
+              </div>
+            </div>
+
+            <div style={{ padding:"20px" }}>
+              {editing ? (
+                <>
+                  {/* Title */}
+                  <div style={{ marginBottom:14 }}>
+                    <FieldLabel label="Title" required />
+                    <input value={form.title} onChange={e=>sf("title",e.target.value)}
+                      placeholder="Book title" style={inputStyle(errors.title)} />
+                    {errors.title && <div style={{ color:T.error, fontSize:11, marginTop:4 }}>{errors.title}</div>}
+                  </div>
+
+                  {/* Authors */}
+                  <div style={{ marginBottom:14 }}>
+                    <FieldLabel label="Authors" required />
+                    {bookAuthors.length>0 && (
+                      <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:8 }}>
+                        {bookAuthors.map(a=>(
+                          <div key={a.id} style={{ display:"flex", alignItems:"center", gap:4,
+                            background:"#EFF6FF", border:"1px solid #BFDBFE", borderRadius:6, padding:"4px 10px" }}>
+                            <span style={{ fontSize:13, color:T.accent }}>{a.name}</span>
+                            <span onClick={()=>sf("authorIds",form.authorIds.filter(id=>id!==a.id))}
+                              style={{ cursor:"pointer", color:T.muted, fontSize:14 }}>×</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <input value={authorSearch} onChange={e=>setAuthorSearch(e.target.value)}
+                      placeholder="Search or add author…"
+                      style={{ width:"100%", padding:"10px 12px", border:`1px solid ${errors.authors?T.error:T.border}`,
+                        borderRadius:authorSearch&&(filteredAuthors.length>0||authorSearch)?"8px 8px 0 0":8,
+                        fontSize:14, color:T.textDark, outline:"none", background:T.card }} />
+                    {authorSearch && (
+                      <div style={{ border:`1px solid ${T.border}`, borderTop:"none",
+                        borderRadius:"0 0 8px 8px", background:T.card, maxHeight:160, overflowY:"auto" }}>
+                        {filteredAuthors.slice(0,6).map(a=>(
+                          <div key={a.id} onClick={()=>{ sf("authorIds",[...form.authorIds,a.id]); setAuthorSearch(""); }}
+                            style={{ padding:"9px 12px", cursor:"pointer", fontSize:13, color:T.textMid,
+                              borderBottom:`1px solid ${T.border}` }}>{a.name}</div>
+                        ))}
+                        <div style={{ padding:"10px 12px", display:"flex", gap:8, alignItems:"center",
+                          borderTop: filteredAuthors.length?`1px solid ${T.border}`:"none" }}>
+                          <span style={{ fontSize:12, color:T.muted, flex:1 }}>
+                            {filteredAuthors.length===0 ? `Add "${authorSearch}" as new author` : `Add "${authorSearch}"`}
+                          </span>
+                          <Btn size="sm" variant="accent" onClick={()=>{
+                            const name = authorSearch.trim();
+                            if (!name) return;
+                            sf("authorIds",[...form.authorIds,`__new__${name}`]);
+                            setAuthorSearch("");
+                          }}>+ Add</Btn>
+                        </div>
+                      </div>
+                    )}
+                    {errors.authors && <div style={{ color:T.error, fontSize:11, marginTop:4 }}>{errors.authors}</div>}
+                  </div>
+
+                  {/* Genre */}
+                  <div style={{ marginBottom:14 }}>
+                    <FieldLabel label="Genre" />
+                    <input value={form.genre} onChange={e=>sf("genre",e.target.value)}
+                      placeholder="e.g. Fiction, Self-help, Sci-fi…" style={inputStyle()} />
+                  </div>
+
+                  {/* Status */}
+                  <div style={{ marginBottom:14 }}>
+                    <FieldLabel label="Status" required />
+                    <div style={{ display:"flex", gap:7, flexWrap:"wrap" }}>
+                      {Object.entries(STATUS_COLORS).map(([s,c])=>(
+                        <div key={s} onClick={()=>sf("status",s)}
+                          style={{ padding:"7px 14px", borderRadius:20, cursor:"pointer", fontSize:12, fontWeight:600,
+                            background:form.status===s?c.bg:T.card, color:form.status===s?c.color:T.textMid,
+                            border:`1.5px solid ${form.status===s?c.border:T.border}` }}>{s}</div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Toggles */}
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:14 }}>
+                    <Toggle label="Owned" value={form.owned} onChange={v=>sf("owned",v)} />
+                    <Toggle label="Borrowed" value={form.borrowed} onChange={v=>sf("borrowed",v)} />
+                  </div>
+
+                  {/* Read Logs */}
+                  <div style={{ marginBottom:14 }}>
+                    <FieldLabel label="Read Logs" />
+                    {form.readLogs.map((log,i)=>(
+                      <div key={i} style={{ background:T.card, border:`1px solid ${T.border}`,
+                        borderRadius:8, padding:12, marginBottom:8 }}>
+                        <div style={{ display:"flex", gap:7, marginBottom:4 }}>
+                          <select value={log.format||"Paperback"} onChange={e=>{ const l=[...form.readLogs]; l[i]={...l[i],format:e.target.value}; sf("readLogs",l); }}
+                            style={{ flex:2, padding:"8px 10px", border:`1px solid ${T.border}`,
+                              borderRadius:7, fontSize:13, color:T.textDark, outline:"none", background:T.surface, appearance:"none" }}>
+                            {Object.keys(FORMAT_COLORS).map(f=><option key={f} value={f}>{f}</option>)}
+                          </select>
+                          <select value={log.month||""} onChange={e=>{ const l=[...form.readLogs]; l[i]={...l[i],month:e.target.value}; sf("readLogs",l); }}
+                            style={{ flex:1.2, padding:"8px 6px", border:`1px solid ${T.border}`,
+                              borderRadius:7, fontSize:12, color:log.month?T.textDark:T.muted, outline:"none", background:T.surface, appearance:"none" }}>
+                            <option value="">Month</option>
+                            {MONTHS_FULL.map((m,idx)=><option key={m} value={idx+1}>{m}</option>)}
+                          </select>
+                          <input value={log.year||""} onChange={e=>{ const l=[...form.readLogs]; l[i]={...l[i],year:e.target.value}; sf("readLogs",l); }}
+                            placeholder="Year"
+                            style={{ flex:1, padding:"8px 6px", border:`1px solid ${errors[`log_${i}_year`]?T.error:T.border}`,
+                              borderRadius:7, fontSize:13, color:T.textDark, outline:"none", background:T.surface }} />
+                          <button onClick={()=>sf("readLogs",form.readLogs.filter((_,idx)=>idx!==i))}
+                            style={{ padding:"8px 10px", border:"none", borderRadius:7,
+                              background:"#FEF2F2", color:T.error, cursor:"pointer", fontSize:14 }}>✕</button>
+                        </div>
+                        {errors[`log_${i}_year`] && <div style={{ color:T.error, fontSize:11 }}>{errors[`log_${i}_year`]}</div>}
+                      </div>
+                    ))}
+                    <button onClick={()=>sf("readLogs",[...form.readLogs,{format:"Paperback",month:"",year:""}])}
+                      style={{ width:"100%", padding:10, border:`1.5px dashed ${T.border}`,
+                        borderRadius:8, background:"transparent", cursor:"pointer", fontSize:12, color:T.muted }}>
+                      + Add read log
+                    </button>
+                  </div>
+
+                  {/* Rating */}
+                  <div style={{ marginBottom:14 }}>
+                    <FieldLabel label="Rating" />
+                    <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                      <Stars rating={form.rating} onSet={v=>sf("rating",v)} size={28} />
+                      {form.rating>0 && <span style={{ fontSize:12, color:T.muted }}>
+                        {["","Poor","Fair","Good","Great","Excellent"][form.rating]}
+                      </span>}
+                    </div>
+                  </div>
+
+                  {/* Notes */}
+                  <div style={{ marginBottom:20 }}>
+                    <FieldLabel label="Notes" />
+                    <textarea value={form.notes} onChange={e=>sf("notes",e.target.value)}
+                      placeholder="Thoughts, quotes, highlights…" rows={4}
+                      style={{ width:"100%", padding:"10px 12px", border:`1px solid ${T.border}`,
+                        borderRadius:8, fontSize:14, color:T.textDark, outline:"none",
+                        background:T.card, resize:"vertical" }} />
+                  </div>
+
+                  <div style={{ display:"flex", gap:8 }}>
+                    {book.id && <Btn onClick={()=>setEditing(false)} variant="secondary" size="lg">Cancel</Btn>}
+                    <Btn onClick={handleSave} variant="primary" size="lg">
+                      {book.id?"Save Changes":"Add Book"}
+                    </Btn>
+                  </div>
+                </>
+              ) : (
+                /* ── DETAIL VIEW ── */
+                <>
+                  <div style={{ display:"flex", gap:12, alignItems:"flex-start", marginBottom:16 }}>
+                    <div style={{ width:6, alignSelf:"stretch", borderRadius:3, background:spineColor(book.id), flexShrink:0 }} />
+                    <div>
+                      <div style={{ fontFamily:"'Playfair Display',serif", fontSize:22, fontWeight:700,
+                        color:T.textDark, lineHeight:1.3 }}>{book.title}</div>
+                      <div style={{ fontSize:14, color:T.muted, marginTop:4 }}>
+                        {allAuthors.filter(a=>(book.authorIds||[]).includes(a.id)).map(a=>a.name).join(", ")}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:7, marginBottom:18 }}>
+                    <Badge label={book.status} {...(STATUS_COLORS[book.status]||{})} />
+                    {book.genre && <Badge label={book.genre} color={genreColor(book.genre)}
+                      bg={genreColor(book.genre)+"15"} border={genreColor(book.genre)+"44"} />}
+                    {book.owned && <Badge label="OWNED" color="#059669" bg="#ECFDF5" border="#6EE7B7" />}
+                    {book.borrowed && <Badge label="BORROWED" color="#D97706" bg="#FFFBEB" border="#FCD34D" />}
+                  </div>
+                  {book.rating>0 && (
+                    <div style={{ marginBottom:16 }}>
+                      <div style={{ fontSize:11, fontWeight:600, color:T.muted, letterSpacing:"0.06em", marginBottom:5 }}>RATING</div>
+                      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                        <Stars rating={book.rating} size={20} />
+                        <span style={{ fontSize:13, color:T.textMid }}>{["","Poor","Fair","Good","Great","Excellent"][book.rating]}</span>
+                      </div>
+                    </div>
+                  )}
+                  {(book.readLogs||[]).length>0 && (
+                    <div style={{ marginBottom:16 }}>
+                      <div style={{ fontSize:11, fontWeight:600, color:T.muted, letterSpacing:"0.06em", marginBottom:8 }}>READ LOGS</div>
+                      <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
+                        {book.readLogs.map((log,i)=>{
+                          const fc = FORMAT_COLORS[log.format]||{color:T.muted,bg:T.surface,border:T.border};
+                          return <div key={i} style={{ display:"flex", alignItems:"center", gap:10,
+                            background:T.card, border:`1px solid ${T.border}`, borderRadius:8, padding:"10px 14px" }}>
+                            <Badge label={log.format} color={fc.color} bg={fc.bg} border={fc.border} />
+                            <span style={{ fontSize:13, color:T.textMid }}>
+                              {log.month ? `${MONTHS[log.month-1]} ${log.year}` : log.year||"Year unknown"}
+                            </span>
+                          </div>;
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {book.notes && (
+                    <div style={{ marginBottom:16 }}>
+                      <div style={{ fontSize:11, fontWeight:600, color:T.muted, letterSpacing:"0.06em", marginBottom:6 }}>NOTES</div>
+                      <div style={{ fontSize:14, color:T.textMid, lineHeight:1.6, background:T.card,
+                        border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 14px", whiteSpace:"pre-wrap" }}>
+                        {book.notes}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ── LIBRARY ────────────────────────────────────────────────────────────────
+    function LibraryScreen({ db, onSelectBook }) {
+      const [search, setSearch] = useState("");
+      const [statusFilter, setStatusFilter] = useState("All");
+      const [authorFilter, setAuthorFilter] = useState("");
+      const [sortBy, setSortBy] = useState("title");
+      const [showSort, setShowSort] = useState(false);
+
+      const filtered = useMemo(()=>{
+        let books = db.books;
+        if (statusFilter!=="All") books = books.filter(b=>b.status===statusFilter);
+        if (authorFilter) books = books.filter(b=>(b.authorIds||[]).includes(authorFilter));
+        if (search.trim()) {
+          const q = search.toLowerCase();
+          books = books.filter(b => {
+            const authors = db.authors.filter(a=>(b.authorIds||[]).includes(a.id));
+            return b.title.toLowerCase().includes(q)
+              || authors.some(a=>a.name.toLowerCase().includes(q))
+              || (b.genre||"").toLowerCase().includes(q);
+          });
+        }
+        return [...books].sort((a,b)=>{
+          if (sortBy==="title") return a.title.localeCompare(b.title);
+          if (sortBy==="rating") return (b.rating||0)-(a.rating||0);
+          if (sortBy==="year") {
+            const ay=Math.max(...(a.readLogs||[]).map(l=>+l.year||0),0);
+            const by2=Math.max(...(b.readLogs||[]).map(l=>+l.year||0),0);
+            return by2-ay;
+          }
+          return 0;
+        });
+      },[db,search,statusFilter,authorFilter,sortBy]);
+
+      const filterAuthorObj = db.authors.find(a=>a.id===authorFilter);
+
+      return <div>
+        {/* Search */}
+        <div style={{ display:"flex", alignItems:"center", gap:10, background:T.card,
+          border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 14px", marginBottom:14 }}>
+          <span style={{ color:T.muted, fontSize:16 }}>🔍</span>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Search by title, author, genre…"
+            style={{ flex:1, border:"none", outline:"none", fontSize:14, color:T.textDark, background:"transparent" }} />
+          {search && <span onClick={()=>setSearch("")} style={{ cursor:"pointer", color:T.muted, fontSize:16 }}>✕</span>}
+        </div>
+
+        {/* Filters */}
+        <div style={{ display:"flex", gap:7, marginBottom:12, flexWrap:"wrap", alignItems:"center" }}>
+          {["All","Read","Currently Reading","Want to Read"].map(f=>(
+            <button key={f} onClick={()=>setStatusFilter(f)}
+              style={{ fontSize:11, fontWeight:600, letterSpacing:"0.04em", padding:"5px 13px",
+                borderRadius:20, border:"none", cursor:"pointer",
+                background:statusFilter===f?T.base:T.card, color:statusFilter===f?T.navText:T.textMid,
+                border:`1px solid ${statusFilter===f?T.base:T.border}` }}>
+              {f==="All"?"All Books":f}
+            </button>
+          ))}
+          <select value={authorFilter} onChange={e=>setAuthorFilter(e.target.value)}
+            style={{ marginLeft:"auto", padding:"5px 28px 5px 10px",
+              border:`1px solid ${authorFilter?T.accent:T.border}`, borderRadius:20,
+              fontSize:11, fontWeight:600, color:authorFilter?T.accent:T.textMid,
+              background:authorFilter?"#EFF6FF":T.card, outline:"none", appearance:"none", cursor:"pointer" }}>
+            <option value="">All Authors</option>
+            {db.authors.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+          <div style={{ position:"relative" }}>
+            <button onClick={()=>setShowSort(s=>!s)}
+              style={{ padding:"5px 13px", borderRadius:20, border:`1px solid ${T.border}`,
+                background:T.card, fontSize:11, fontWeight:600, color:T.textMid, cursor:"pointer" }}>⇅ Sort</button>
+            {showSort && <div style={{ position:"absolute", right:0, top:34, background:T.card,
+              border:`1px solid ${T.border}`, borderRadius:8, boxShadow:"0 4px 16px rgba(0,0,0,0.1)", zIndex:10, minWidth:140 }}>
+              {[["title","Title A–Z"],["rating","Highest Rated"],["year","Most Recent"]].map(([k,l])=>(
+                <div key={k} onClick={()=>{setSortBy(k);setShowSort(false);}}
+                  style={{ padding:"9px 14px", fontSize:12, color:sortBy===k?T.accent:T.textMid,
+                    cursor:"pointer", fontWeight:sortBy===k?600:400, background:sortBy===k?"#EFF6FF":"transparent" }}>{l}</div>
+              ))}
+            </div>}
+          </div>
+        </div>
+
+        {filterAuthorObj && <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12,
+          background:"#EFF6FF", border:"1px solid #BFDBFE", borderRadius:8, padding:"7px 12px" }}>
+          <span style={{ fontSize:12, color:T.accent }}>Filtering by: <strong>{filterAuthorObj.name}</strong></span>
+          <span onClick={()=>setAuthorFilter("")} style={{ cursor:"pointer", color:T.accent, fontSize:14 }}>✕</span>
+        </div>}
+
+        <div style={{ fontSize:11, color:T.muted, marginBottom:10 }}>
+          {filtered.length} {filtered.length===1?"book":"books"}
+        </div>
+
+        {filtered.length===0 ? (
+          <div style={{ textAlign:"center", padding:"50px 20px", color:T.muted }}>
+            <div style={{ fontSize:40, marginBottom:12 }}>📭</div>
+            <div style={{ fontSize:15, color:T.textMid, marginBottom:6 }}>No books found</div>
+            <div style={{ fontSize:13 }}>Try adjusting your search or filters</div>
+          </div>
+        ) : (
+          <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
+            {filtered.map(book=><BookCard key={book.id} book={book} authors={db.authors} onClick={()=>onSelectBook(book)} />)}
+          </div>
+        )}
+      </div>;
+    }
+
+    // ── DASHBOARD ──────────────────────────────────────────────────────────────
+    function DashboardScreen({ db }) {
+      const currentYear = new Date().getFullYear();
+      const [selectedYear, setSelectedYear] = useState(currentYear);
+      const [selectedMonth, setSelectedMonth] = useState(null);
+
+      const allLogs = db.books.flatMap(book=>(book.readLogs||[]).map(log=>({...log,book})));
+      const years = [...new Set(allLogs.map(l=>+l.year).filter(Boolean))].sort((a,b)=>b-a);
+      if (!years.includes(selectedYear) && years.length) { /* use first available */ }
+
+      const logsThisYear = allLogs.filter(l=>+l.year===selectedYear);
+      const booksThisYear = [...new Set(logsThisYear.map(l=>l.book.id))].length;
+
+      const totalRead = db.books.filter(b=>b.status==="Read").length;
+      const totalOwned = db.books.filter(b=>b.owned).length;
+      const wantToRead = db.books.filter(b=>b.status==="Want to Read").length;
+      const currentlyReading = db.books.filter(b=>b.status==="Currently Reading").length;
+
+      const monthlyData = MONTHS.map((m,i)=>{
+        const ml = logsThisYear.filter(l=>+l.month===i+1);
+        return { month:m, monthNum:i+1, count:[...new Set(ml.map(l=>l.book.id))].length, hasData:ml.length>0 };
+      });
+
+      const booksPerYear = years.map(y=>({
+        year:y, count:[...new Set(allLogs.filter(l=>+l.year===y).map(l=>l.book.id))].length
+      }));
+      const maxY = Math.max(...booksPerYear.map(d=>d.count),1);
+
+      const formatCounts = {};
+      logsThisYear.forEach(l=>{ if(l.format) formatCounts[l.format]=(formatCounts[l.format]||0)+1; });
+      const totalFormats = Object.values(formatCounts).reduce((s,v)=>s+v,0);
+
+      const monthsWithData = monthlyData.filter(m=>m.hasData).length;
+      const avgPerMonth = monthsWithData>0?(booksThisYear/monthsWithData).toFixed(1):"—";
+
+      const selectedMonthBooks = selectedMonth
+        ? [...new Set(logsThisYear.filter(l=>+l.month===selectedMonth).map(l=>l.book.id))]
+            .map(id=>db.books.find(b=>b.id===id)).filter(Boolean)
+        : [];
+      const hasMonthData = selectedMonth ? logsThisYear.some(l=>+l.month===selectedMonth) : false;
+
+      const ratingDist = [5,4,3,2,1].map(r=>({ rating:r, count:db.books.filter(b=>b.rating===r).length }));
+      const ratedBooks = db.books.filter(b=>b.rating>0).length;
+
+      return <div>
+        {/* Year selector */}
+        <div style={{ display:"flex", gap:7, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
+          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:18, fontWeight:700, color:T.textDark, marginRight:4 }}>
+            Stats for
+          </div>
+          {years.length===0
+            ? <span style={{ fontSize:13, color:T.muted }}>No read logs yet — add books with read dates!</span>
+            : years.map(y=><button key={y} onClick={()=>{setSelectedYear(y);setSelectedMonth(null);}}
+                style={{ padding:"5px 14px", borderRadius:20, border:"none", cursor:"pointer",
+                  fontSize:12, fontWeight:600,
+                  background:selectedYear===y?T.base:T.card, color:selectedYear===y?T.navText:T.textMid,
+                  border:`1px solid ${selectedYear===y?T.base:T.border}` }}>{y}</button>)
+          }
+        </div>
+
+        {/* Stat cards */}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:16 }}>
+          {[
+            {label:"Total Read",    value:totalRead,        sub:"all time",       color:"#059669"},
+            {label:"This Year",     value:booksThisYear,    sub:String(selectedYear), color:T.accent},
+            {label:"Avg / Month",   value:avgPerMonth,      sub:"months w/ data", color:"#D97706"},
+            {label:"Want to Read",  value:wantToRead,       sub:"in queue",       color:"#7C3AED"},
+            {label:"Owned",         value:totalOwned,       sub:"books",          color:"#0891B2"},
+            {label:"Reading Now",   value:currentlyReading, sub:"in progress",    color:"#DB2777"},
+          ].map(s=>(
+            <div key={s.label} style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 16px" }}>
+              <div style={{ fontSize:10, fontWeight:600, color:T.muted, letterSpacing:"0.07em", marginBottom:4 }}>{s.label.toUpperCase()}</div>
+              <div style={{ fontFamily:"'Playfair Display',serif", fontSize:30, fontWeight:700, color:s.color, lineHeight:1 }}>{s.value}</div>
+              <div style={{ fontSize:10, color:T.muted, marginTop:4 }}>{s.sub}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Books per year */}
+        {booksPerYear.length>0 && <div style={{ background:T.card, border:`1px solid ${T.border}`,
+          borderRadius:10, padding:16, marginBottom:14 }}>
+          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:14 }}>Books per Year</div>
+          <div style={{ display:"flex", alignItems:"flex-end", gap:10, height:90 }}>
+            {booksPerYear.map(d=>(
+              <div key={d.year} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
+                <div style={{ fontSize:10, color:T.muted }}>{d.count}</div>
+                <div onClick={()=>{setSelectedYear(d.year);setSelectedMonth(null);}}
+                  style={{ width:"100%", borderRadius:"4px 4px 0 0",
+                    background:d.year===selectedYear?T.accent:"#BFDBFE",
+                    height:`${Math.max((d.count/maxY)*60,4)}px`, cursor:"pointer" }} />
+                <div style={{ fontSize:10, color:d.year===selectedYear?T.accent:T.muted,
+                  fontWeight:d.year===selectedYear?600:400 }}>{d.year}</div>
+              </div>
+            ))}
+          </div>
+        </div>}
+
+        {/* Format breakdown */}
+        {totalFormats>0 && <div style={{ background:T.card, border:`1px solid ${T.border}`,
+          borderRadius:10, padding:16, marginBottom:14 }}>
+          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:4 }}>Format Breakdown</div>
+          <div style={{ fontSize:11, color:T.muted, marginBottom:12 }}>{selectedYear}</div>
+          <div style={{ display:"flex", borderRadius:6, overflow:"hidden", height:12, marginBottom:14 }}>
+            {Object.entries(formatCounts).map(([f,c])=>{
+              const fc=FORMAT_COLORS[f]||{color:T.muted};
+              return <div key={f} style={{ width:`${(c/totalFormats)*100}%`, background:fc.color }} />;
+            })}
+          </div>
+          {Object.entries(formatCounts).map(([f,c])=>{
+            const fc=FORMAT_COLORS[f]||{color:T.muted};
+            return <div key={f} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+              <div style={{ width:10, height:10, borderRadius:2, background:fc.color, flexShrink:0 }} />
+              <div style={{ fontSize:12, color:T.textMid, flex:1 }}>{f}</div>
+              <div style={{ fontSize:12, fontWeight:600, color:T.textDark }}>{c}</div>
+              <div style={{ fontSize:11, color:T.muted, width:36, textAlign:"right" }}>{Math.round((c/totalFormats)*100)}%</div>
+            </div>;
+          })}
+        </div>}
+
+        {/* Monthly grid */}
+        <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:10, padding:16, marginBottom:14 }}>
+          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:4 }}>Monthly Detail</div>
+          <div style={{ fontSize:11, color:T.muted, marginBottom:12 }}>Tap a month for details</div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:7 }}>
+            {monthlyData.map(m=>{
+              const isSel = selectedMonth===m.monthNum;
+              return <div key={m.month} onClick={()=>setSelectedMonth(isSel?null:m.monthNum)}
+                style={{ borderRadius:8, padding:"10px 6px", textAlign:"center", cursor:"pointer",
+                  background:isSel?T.accent:!m.hasData?T.surface:T.base,
+                  border:`1px solid ${isSel?T.accent:T.border}` }}>
+                <div style={{ fontSize:10, color:isSel?"#FFF":!m.hasData?T.muted:"#94A3B8" }}>{m.month}</div>
+                <div style={{ fontFamily:"'Playfair Display',serif", fontSize:18, fontWeight:700,
+                  color:isSel?"#FFF":!m.hasData?T.muted:T.navText }}>
+                  {!m.hasData?"—":m.count}
+                </div>
+              </div>;
+            })}
+          </div>
+        </div>
+
+        {/* Month detail */}
+        {selectedMonth && <div style={{ background:T.card, border:`1px solid ${T.border}`,
+          borderRadius:10, padding:16, marginBottom:14 }}>
+          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:12 }}>
+            {MONTHS_FULL[selectedMonth-1]} {selectedYear}
+          </div>
+          {!hasMonthData
+            ? <div style={{ fontSize:13, color:T.muted, textAlign:"center", padding:"16px 0" }}>Monthly data not available.</div>
+            : selectedMonthBooks.length===0
+              ? <div style={{ fontSize:13, color:T.muted }}>No books logged for this month.</div>
+              : <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  {selectedMonthBooks.map(book=>(
+                    <div key={book.id} style={{ display:"flex", alignItems:"center", gap:10,
+                      padding:"10px 12px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:8 }}>
+                      <div style={{ width:4, height:36, borderRadius:2, background:spineColor(book.id), flexShrink:0 }} />
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontFamily:"'Playfair Display',serif", fontSize:13, fontWeight:700, color:T.textDark }}>{book.title}</div>
+                        <div style={{ fontSize:11, color:T.muted, marginTop:2 }}>
+                          {db.authors.filter(a=>(book.authorIds||[]).includes(a.id)).map(a=>a.name).join(", ")}
+                        </div>
+                      </div>
+                      {book.rating>0 && <Stars rating={book.rating} size={12} />}
+                    </div>
+                  ))}
+                </div>
+          }
+        </div>}
+
+        {/* Ratings distribution */}
+        {ratedBooks>0 && <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:10, padding:16 }}>
+          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:15, fontWeight:700, color:T.textDark, marginBottom:12 }}>Ratings Distribution</div>
+          {ratingDist.map(({rating,count})=>(
+            <div key={rating} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
+              <Stars rating={rating} size={12} />
+              <div style={{ flex:1, height:8, borderRadius:4, background:T.surface, overflow:"hidden" }}>
+                <div style={{ height:"100%", borderRadius:4, background:"#F59E0B",
+                  width:`${ratedBooks>0?(count/ratedBooks)*100:0}%` }} />
+              </div>
+              <div style={{ fontSize:11, color:T.muted, width:20, textAlign:"right" }}>{count}</div>
+            </div>
+          ))}
+        </div>}
+      </div>;
+    }
+
+    // ── AUTHORS ────────────────────────────────────────────────────────────────
+    function AuthorsScreen({ db, onSelectBook }) {
+      const [search, setSearch] = useState("");
+      const filtered = db.authors.filter(a=>a.name.toLowerCase().includes(search.toLowerCase()));
+
+      return <div>
+        <div style={{ display:"flex", alignItems:"center", gap:10, background:T.card,
+          border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 14px", marginBottom:16 }}>
+          <span style={{ color:T.muted, fontSize:16 }}>🔍</span>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search authors…"
+            style={{ flex:1, border:"none", outline:"none", fontSize:14, color:T.textDark, background:"transparent" }} />
+        </div>
+        {filtered.length===0
+          ? <div style={{ textAlign:"center", padding:"50px 20px", color:T.muted }}>
+              <div style={{ fontSize:36, marginBottom:10 }}>✍️</div>
+              <div style={{ fontSize:14, color:T.textMid }}>No authors yet</div>
+              <div style={{ fontSize:12, marginTop:4 }}>Authors are added when you add books</div>
+            </div>
+          : <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
+              {filtered.map(author=>{
+                const books = db.books.filter(b=>(b.authorIds||[]).includes(author.id));
+                const readCount = books.filter(b=>b.status==="Read").length;
+                return <div key={author.id} style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:10, padding:"14px 16px" }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom: books.length?10:0 }}>
+                    <div>
+                      <div style={{ fontFamily:"'Playfair Display',serif", fontSize:16, fontWeight:700, color:T.textDark }}>{author.name}</div>
+                      <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>{books.length} {books.length===1?"book":"books"} · {readCount} read</div>
+                    </div>
+                    {readCount>0 && <Badge label={`${readCount} READ`} color="#059669" bg="#ECFDF5" border="#6EE7B7" size={10} />}
+                  </div>
+                  {books.length>0 && <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+                    {books.map(book=>(
+                      <div key={book.id} onClick={()=>onSelectBook(book)}
+                        style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px",
+                          background:T.surface, border:`1px solid ${T.border}`, borderRadius:7, cursor:"pointer" }}>
+                        <div style={{ width:3, height:20, borderRadius:2, background:spineColor(book.id), flexShrink:0 }} />
+                        <div style={{ flex:1, fontSize:13, color:T.textMid }}>{book.title}</div>
+                        <Badge label={book.status} {...(STATUS_COLORS[book.status]||{})} size={9} />
+                      </div>
+                    ))}
+                  </div>}
+                </div>;
+              })}
+            </div>
+        }
+      </div>;
+    }
+
+    // ── ROOT APP ───────────────────────────────────────────────────────────────
+    function App() {
+      const [db, setDb] = useState(()=>loadDB());
+      const [nav, setNav] = useState("Library");
+      const [selectedBook, setSelectedBook] = useState(null);
+      const [showAdd, setShowAdd] = useState(false);
+      const [toast, setToast] = useState(null);
+
+      useEffect(()=>{ saveDB(db); },[db]);
+
+      function showToast(msg, type="success") {
+        setToast({msg,type});
+        setTimeout(()=>setToast(null),2500);
+      }
+
+      function saveBook(form) {
+        setDb(prev=>{
+          let authors=[...prev.authors], nextAuthorId=prev.nextAuthorId;
+          const resolvedIds = form.authorIds.map(id=>{
+            if (!id.startsWith("__new__")) return id;
+            const name=id.replace("__new__","");
+            const ex=authors.find(a=>a.name.toLowerCase()===name.toLowerCase());
+            if (ex) return ex.id;
+            const newId=`a_${nextAuthorId++}`;
+            authors.push({id:newId,name});
+            return newId;
+          });
+          const bookData={...form,authorIds:resolvedIds};
+          let books, nextBookId=prev.nextBookId;
+          if (bookData.id) {
+            books=prev.books.map(b=>b.id===bookData.id?bookData:b);
+          } else {
+            const newId=`b_${nextBookId++}`;
+            books=[...prev.books,{...bookData,id:newId}];
+          }
+          return{...prev,authors,books,nextAuthorId,nextBookId};
+        });
+        setSelectedBook(null); setShowAdd(false);
+        showToast(form.id?"Book updated!":"Book added!");
+      }
+
+      function deleteBook(book) {
+        if (!window.confirm(`Delete "${book.title}"?`)) return;
+        setDb(prev=>({...prev,books:prev.books.filter(b=>b.id!==book.id)}));
+        setSelectedBook(null);
+        showToast("Book deleted","info");
+      }
+
+      const NAV=[{key:"Library",icon:"📚"},{key:"Dashboard",icon:"📊"},{key:"Add",icon:"＋"},{key:"Authors",icon:"✍️"}];
+
+      return <div style={{ height:"100vh", display:"flex", flexDirection:"column", background:T.surface }}>
+        {/* Header */}
+        <div style={{ background:T.base, padding:"14px 20px 12px", flexShrink:0,
+          paddingTop:"max(14px, env(safe-area-inset-top))" }}>
+          <div style={{ fontFamily:"'Playfair Display',serif", fontSize:22, color:T.navText }}>Bookshelf</div>
+          <div style={{ fontSize:11, color:T.muted, marginTop:2 }}>{db.books.length} books tracked</div>
+        </div>
+
+        {/* Scrollable body */}
+        <div style={{ flex:1, overflowY:"auto", padding:"18px 16px 20px" }}>
+          {nav==="Library"   && <LibraryScreen db={db} onSelectBook={setSelectedBook} />}
+          {nav==="Dashboard" && <DashboardScreen db={db} />}
+          {nav==="Authors"   && <AuthorsScreen db={db} onSelectBook={setSelectedBook} />}
+        </div>
+
+        {/* Bottom nav */}
+        <div style={{ background:T.base, flexShrink:0,
+          paddingBottom:"max(10px, env(safe-area-inset-bottom))",
+          borderTop:"1px solid rgba(255,255,255,0.07)" }}>
+          <div style={{ display:"flex" }}>
+            {NAV.map(item=>{
+              const isAdd=item.key==="Add";
+              const active=!isAdd&&nav===item.key;
+              return <button key={item.key}
+                onClick={()=>isAdd?setShowAdd(true):setNav(item.key)}
+                style={{ flex:1, padding:"12px 4px 10px", border:"none",
+                  background:isAdd?T.accent:"transparent", cursor:"pointer",
+                  display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}>
+                <span style={{ fontSize:isAdd?22:18 }}>{item.icon}</span>
+                <span style={{ fontSize:9, fontWeight:600, letterSpacing:"0.05em",
+                  color:active||isAdd?"#FFF":"rgba(255,255,255,0.35)" }}>{item.key.toUpperCase()}</span>
+                {active && <div style={{ width:16, height:2, borderRadius:1, background:T.accent }} />}
+              </button>;
+            })}
+          </div>
+        </div>
+
+        {/* Sheets */}
+        {selectedBook && <BookSheet book={selectedBook} allAuthors={db.authors}
+          onClose={()=>setSelectedBook(null)} onSave={saveBook} onDelete={()=>deleteBook(selectedBook)} />}
+        {showAdd && <BookSheet book={{}} allAuthors={db.authors}
+          onClose={()=>setShowAdd(false)} onSave={saveBook} onDelete={()=>{}} />}
+
+        {/* Toast */}
+        {toast && <div style={{ position:"fixed", top:80, left:"50%", transform:"translateX(-50%)",
+          background:toast.type==="success"?"#059669":toast.type==="info"?T.accent:T.error,
+          color:"#FFF", padding:"10px 20px", borderRadius:24, fontSize:13, fontWeight:600,
+          boxShadow:"0 4px 16px rgba(0,0,0,0.2)", zIndex:200, animation:"fadeInDown 0.2s ease",
+          whiteSpace:"nowrap" }}>{toast.msg}</div>}
+      </div>;
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+
+  <!-- PWA Service Worker -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("sw.js").catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>
