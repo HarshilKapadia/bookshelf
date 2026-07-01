@@ -68,8 +68,24 @@
 
     // ── STORAGE ────────────────────────────────────────────────────────────────
     const LS_KEY = "bookshelf_v1";
-    const EMPTY_DB = { authors: [], books: [], nextAuthorId: 1, nextBookId: 1 };
-    function loadDB() { try { const r = localStorage.getItem(LS_KEY); return r ? JSON.parse(r) : EMPTY_DB; } catch { return EMPTY_DB; } }
+    const EMPTY_DB = { authors: [], books: [], series: [], goals: [], nextAuthorId: 1, nextBookId: 1, nextSeriesId: 1, nextGoalId: 1 };
+    function loadDB() {
+      try {
+        const r = localStorage.getItem(LS_KEY);
+        if (!r) return EMPTY_DB;
+        const parsed = JSON.parse(r);
+        return {
+          authors: parsed.authors || [],
+          books: parsed.books || [],
+          series: parsed.series || [],
+          goals: parsed.goals || [],
+          nextAuthorId: parsed.nextAuthorId || 1,
+          nextBookId: parsed.nextBookId || 1,
+          nextSeriesId: parsed.nextSeriesId || 1,
+          nextGoalId: parsed.nextGoalId || 1,
+        };
+      } catch { return EMPTY_DB; }
+    }
     function saveDB(db) { try { localStorage.setItem(LS_KEY, JSON.stringify(db)); } catch {} }
 
     // ── HELPERS ────────────────────────────────────────────────────────────────
@@ -158,12 +174,13 @@
       return latest.month ? `${MONTHS[latest.month-1]} ${latest.year}` : `${latest.year}`;
     }
 
-    function BookCard({ book, authors, onClick }) {
+    function BookCard({ book, authors, series, onClick, onGenreClick }) {
       const sc = STATUS_COLORS[book.status] || { color:T.muted, bg:T.surface, border:T.border };
       const bookAuthors = authors.filter(a => (book.authorIds||[]).includes(a.id));
       const lastRead = lastReadLabel(book);
       const primaryFormat = (book.readLogs||[]).find(l=>l.format)?.format;
       const fc = primaryFormat ? (FORMAT_COLORS[primaryFormat]||{color:T.muted}) : null;
+      const bookSeries = book.seriesId ? (series||[]).find(s=>s.id===book.seriesId) : null;
 
       return (
         <div onClick={onClick} style={{ display:"flex", flexDirection:"column", background:T.card,
@@ -179,6 +196,11 @@
                   <div style={{ fontSize:12, color:T.muted, marginTop:3 }}>
                     {bookAuthors.map(a=>a.name).join(", ") || "Unknown author"}
                   </div>
+                  {bookSeries && (
+                    <div style={{ fontSize:10, color:T.accent, marginTop:3, fontWeight:600, letterSpacing:"0.03em" }}>
+                      {bookSeries.name}{book.seriesPosition?` · Book ${book.seriesPosition}`:""}{bookSeries.totalCount?` of ${bookSeries.totalCount}`:""}
+                    </div>
+                  )}
                 </div>
                 {/* Right column: status stacked above format */}
                 <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:5, flexShrink:0 }}>
@@ -189,7 +211,11 @@
 
               {/* Left side: genre tags only */}
               <div style={{ display:"flex", gap:5, marginTop:10, flexWrap:"wrap", alignItems:"center", flex:1 }}>
-                {book.genre && <Tag label={book.genre.toUpperCase()} color={genreColor(book.genre)} />}
+                {book.genre && (
+                  <span onClick={e=>{ e.stopPropagation(); onGenreClick && onGenreClick(book.genre); }}>
+                    <Tag label={book.genre.toUpperCase()} color={genreColor(book.genre)} />
+                  </span>
+                )}
                 {book.owned && <Tag label="OWNED" color="#059669" />}
                 {book.borrowed && <Tag label="BORROWED" color="#D97706" />}
                 {book.rating > 0 && <Stars rating={book.rating} size={12} />}
@@ -208,15 +234,18 @@
     }
 
     // ── BOOK SHEET ─────────────────────────────────────────────────────────────
-    function BookSheet({ book, allAuthors, onClose, onSave, onDelete }) {
+    function BookSheet({ book, allAuthors, allSeries, onClose, onSave, onDelete }) {
       const isNew = !book.id;
       const [editing, setEditing] = useState(isNew);
       const [form, setForm] = useState({
         title: book.title||"", authorIds: book.authorIds||[], genre: book.genre||"",
         status: book.status||"Want to Read", owned: book.owned||false, borrowed: book.borrowed||false,
         rating: book.rating||0, notes: book.notes||"", readLogs: book.readLogs?.length ? book.readLogs : [],
+        seriesId: book.seriesId||null, seriesPosition: book.seriesPosition||"",
       });
       const [authorSearch, setAuthorSearch] = useState("");
+      const [seriesSearch, setSeriesSearch] = useState("");
+      const [newSeriesTotal, setNewSeriesTotal] = useState("");
       const [errors, setErrors] = useState({});
       const sheetRef = useRef(null);
 
@@ -224,6 +253,16 @@
       const filteredAuthors = allAuthors.filter(a =>
         !form.authorIds.includes(a.id) && a.name.toLowerCase().includes(authorSearch.toLowerCase())
       );
+      const filteredSeries = (allSeries||[]).filter(s =>
+        s.name.toLowerCase().includes(seriesSearch.toLowerCase())
+      );
+      function seriesName(id) {
+        if (!id) return "";
+        if (typeof id === "string" && id.startsWith("__newseries__")) {
+          return id.split("__newseries__")[1].split("__")[0];
+        }
+        return (allSeries||[]).find(s=>s.id===id)?.name || "";
+      }
 
       const sf = (k,v) => setForm(f=>({...f,[k]:v}));
 
@@ -330,6 +369,68 @@
                       placeholder="e.g. Fiction, Self-help, Sci-fi…" style={inputStyle()} />
                   </div>
 
+                  {/* Series */}
+                  <div style={{ marginBottom:14 }}>
+                    <FieldLabel label="Series" />
+                    {form.seriesId ? (
+                      <div style={{ display:"flex", alignItems:"center", gap:8, background:"#EFF6FF",
+                        border:"1px solid #BFDBFE", borderRadius:8, padding:"10px 12px", marginBottom:8 }}>
+                        <span style={{ fontSize:13, color:T.accent, flex:1 }}>
+                          {seriesName(form.seriesId)}
+                        </span>
+                        <span onClick={()=>{ sf("seriesId",null); sf("seriesPosition",""); }}
+                          style={{ cursor:"pointer", color:T.muted, fontSize:14 }}>×</span>
+                      </div>
+                    ) : (
+                      <>
+                        <input value={seriesSearch} onChange={e=>setSeriesSearch(e.target.value)}
+                          placeholder="Search or add a series…"
+                          style={{ width:"100%", padding:"10px 12px", border:`1px solid ${T.border}`,
+                            borderRadius: seriesSearch ? "8px 8px 0 0" : 8,
+                            fontSize:14, color:T.textDark, outline:"none", background:T.card }} />
+                        {seriesSearch && (
+                          <div style={{ border:`1px solid ${T.border}`, borderTop:"none",
+                            borderRadius:"0 0 8px 8px", background:T.card, maxHeight:160, overflowY:"auto" }}>
+                            {filteredSeries.slice(0,6).map(s=>(
+                              <div key={s.id} onClick={()=>{ sf("seriesId",s.id); setSeriesSearch(""); }}
+                                style={{ padding:"9px 12px", cursor:"pointer", fontSize:13, color:T.textMid,
+                                  borderBottom:`1px solid ${T.border}` }}>
+                                {s.name}{s.totalCount?` (${s.totalCount} books)`:""}
+                              </div>
+                            ))}
+                            <div style={{ padding:"10px 12px", display:"flex", flexDirection:"column", gap:8,
+                              borderTop: filteredSeries.length?`1px solid ${T.border}`:"none" }}>
+                              <span style={{ fontSize:12, color:T.muted }}>
+                                {filteredSeries.length===0 ? `Create new series "${seriesSearch}"` : `Or create new: "${seriesSearch}"`}
+                              </span>
+                              <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                                <input value={newSeriesTotal} onChange={e=>setNewSeriesTotal(e.target.value)}
+                                  placeholder="Total books (optional)"
+                                  style={{ flex:1, padding:"7px 10px", border:`1px solid ${T.border}`,
+                                    borderRadius:6, fontSize:12, outline:"none", background:T.surface }} />
+                                <Btn size="sm" variant="accent" onClick={()=>{
+                                  const name = seriesSearch.trim();
+                                  if (!name) return;
+                                  sf("seriesId", `__newseries__${name}__${newSeriesTotal||""}`);
+                                  setSeriesSearch(""); setNewSeriesTotal("");
+                                }}>+ Create</Btn>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {form.seriesId && (
+                      <div style={{ marginTop:8 }}>
+                        <FieldLabel label="Position in series (e.g. Book 3)" />
+                        <input value={form.seriesPosition} onChange={e=>sf("seriesPosition",e.target.value)}
+                          placeholder="e.g. 3" type="number"
+                          style={{ width:"100%", padding:"10px 12px", border:`1px solid ${T.border}`,
+                            borderRadius:8, fontSize:14, color:T.textDark, outline:"none", background:T.card }} />
+                      </div>
+                    )}
+                  </div>
+
                   {/* Status */}
                   <div style={{ marginBottom:14 }}>
                     <FieldLabel label="Status" required />
@@ -424,6 +525,14 @@
                       <div style={{ fontSize:14, color:T.muted, marginTop:4 }}>
                         {allAuthors.filter(a=>(book.authorIds||[]).includes(a.id)).map(a=>a.name).join(", ")}
                       </div>
+                      {book.seriesId && (()=>{
+                        const s = (allSeries||[]).find(sr=>sr.id===book.seriesId);
+                        if (!s) return null;
+                        const total = s.totalCount || (allSeries||[]).filter(sr=>sr.id===book.seriesId).length;
+                        return <div style={{ fontSize:12, color:T.accent, marginTop:5, fontWeight:600 }}>
+                          {s.name}{book.seriesPosition ? ` · Book ${book.seriesPosition}` : ""}{s.totalCount ? ` of ${s.totalCount}` : ""}
+                        </div>;
+                      })()}
                     </div>
                   </div>
                   <div style={{ display:"flex", flexWrap:"wrap", gap:7, marginBottom:18 }}>
@@ -477,17 +586,29 @@
     }
 
     // ── LIBRARY ────────────────────────────────────────────────────────────────
-    function LibraryScreen({ db, onSelectBook }) {
+    function LibraryScreen({ db, onSelectBook, externalGenreFilter, onClearExternalGenreFilter }) {
       const [search, setSearch] = useState("");
       const [statusFilter, setStatusFilter] = useState("All");
       const [authorFilter, setAuthorFilter] = useState("");
+      const [genreFilter, setGenreFilter] = useState(externalGenreFilter || "");
       const [sortBy, setSortBy] = useState("title");
       const [showSort, setShowSort] = useState(false);
+
+      // Sync incoming genre filter from a tapped tag elsewhere
+      useEffect(()=>{
+        if (externalGenreFilter) {
+          setGenreFilter(externalGenreFilter);
+          onClearExternalGenreFilter && onClearExternalGenreFilter();
+        }
+      },[externalGenreFilter]);
+
+      const allGenres = [...new Set(db.books.map(b=>b.genre).filter(Boolean))].sort();
 
       const filtered = useMemo(()=>{
         let books = db.books;
         if (statusFilter!=="All") books = books.filter(b=>b.status===statusFilter);
         if (authorFilter) books = books.filter(b=>(b.authorIds||[]).includes(authorFilter));
+        if (genreFilter) books = books.filter(b=>b.genre===genreFilter);
         if (search.trim()) {
           const q = search.toLowerCase();
           books = books.filter(b => {
@@ -512,7 +633,7 @@
           }
           return 0;
         });
-      },[db,search,statusFilter,authorFilter,sortBy]);
+      },[db,search,statusFilter,authorFilter,genreFilter,sortBy]);
 
       const filterAuthorObj = db.authors.find(a=>a.id===authorFilter);
 
@@ -546,6 +667,14 @@
             <option value="">All Authors</option>
             {db.authors.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
+          <select value={genreFilter} onChange={e=>setGenreFilter(e.target.value)}
+            style={{ padding:"5px 28px 5px 10px",
+              border:`1px solid ${genreFilter?genreColor(genreFilter):T.border}`, borderRadius:20,
+              fontSize:11, fontWeight:600, color:genreFilter?genreColor(genreFilter):T.textMid,
+              background:genreFilter?genreColor(genreFilter)+"15":T.card, outline:"none", appearance:"none", cursor:"pointer" }}>
+            <option value="">All Genres</option>
+            {allGenres.map(g=><option key={g} value={g}>{g}</option>)}
+          </select>
           <div style={{ position:"relative" }}>
             <button onClick={()=>setShowSort(s=>!s)}
               style={{ padding:"5px 13px", borderRadius:20, border:`1px solid ${T.border}`,
@@ -561,10 +690,16 @@
           </div>
         </div>
 
-        {filterAuthorObj && <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12,
+        {filterAuthorObj && <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8,
           background:"#EFF6FF", border:"1px solid #BFDBFE", borderRadius:8, padding:"7px 12px" }}>
-          <span style={{ fontSize:12, color:T.accent }}>Filtering by: <strong>{filterAuthorObj.name}</strong></span>
+          <span style={{ fontSize:12, color:T.accent }}>Filtering by author: <strong>{filterAuthorObj.name}</strong></span>
           <span onClick={()=>setAuthorFilter("")} style={{ cursor:"pointer", color:T.accent, fontSize:14 }}>✕</span>
+        </div>}
+
+        {genreFilter && <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12,
+          background:genreColor(genreFilter)+"15", border:`1px solid ${genreColor(genreFilter)}55`, borderRadius:8, padding:"7px 12px" }}>
+          <span style={{ fontSize:12, color:genreColor(genreFilter) }}>Filtering by genre: <strong>{genreFilter}</strong></span>
+          <span onClick={()=>setGenreFilter("")} style={{ cursor:"pointer", color:genreColor(genreFilter), fontSize:14 }}>✕</span>
         </div>}
 
         <div style={{ fontSize:11, color:T.muted, marginBottom:10 }}>
@@ -579,7 +714,8 @@
           </div>
         ) : (
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            {filtered.map(book=><BookCard key={book.id} book={book} authors={db.authors} onClick={()=>onSelectBook(book)} />)}
+            {filtered.map(book=><BookCard key={book.id} book={book} authors={db.authors} series={db.series}
+              onClick={()=>onSelectBook(book)} onGenreClick={g=>setGenreFilter(g)} />)}
           </div>
         )}
       </div>;
@@ -770,7 +906,405 @@
       </div>;
     }
 
+    // ── PLEDGES ───────────────────────────────────────────────────────────────
+    const GOAL_TYPES = [
+      { key:"total",  label:"Total books" },
+      { key:"genre",  label:"Books by genre" },
+      { key:"format", label:"Books by format" },
+      { key:"book",   label:"Specific book" },
+    ];
+    const GOAL_SCOPES = [
+      { key:"year",  label:"This year" },
+      { key:"month", label:"This month" },
+    ];
+
+    function goalProgress(goal, db, year, month) {
+      const readBooks = db.books.filter(b => b.status === "Read" || (b.readLogs||[]).length > 0);
+
+      if (goal.type === "book") {
+        const book = db.books.find(b => b.id === goal.bookId);
+        const done = book?.status === "Read";
+        return { current: done ? 1 : 0, target: 1, book, done };
+      }
+
+      // Filter by scope
+      let relevant = readBooks.flatMap(book =>
+        (book.readLogs||[]).filter(log => {
+          if (!log.year) return false;
+          if (goal.scope === "year") return +log.year === year;
+          if (goal.scope === "month") return +log.year === year && +log.month === month;
+          return false;
+        }).map(() => book)
+      );
+      // Deduplicate books (count each book once per scope period)
+      const seen = new Set();
+      relevant = relevant.filter(b => { if (seen.has(b.id)) return false; seen.add(b.id); return true; });
+
+      // Apply type filter
+      if (goal.type === "genre") relevant = relevant.filter(b => b.genre === goal.genre);
+      if (goal.type === "format") {
+        relevant = readBooks.filter(book => {
+          const logs = (book.readLogs||[]).filter(log => {
+            if (!log.year) return false;
+            if (goal.scope === "year") return +log.year === year;
+            if (goal.scope === "month") return +log.year === year && +log.month === month;
+            return false;
+          });
+          return logs.some(l => l.format === goal.format);
+        });
+        const seenF = new Set();
+        relevant = relevant.filter(b => { if (seenF.has(b.id)) return false; seenF.add(b.id); return true; });
+      }
+
+      return { current: relevant.length, target: goal.target };
+    }
+
+    function paceStatus(goal, current, year, month) {
+      if (!goal.paceTracked) return null;
+      const now = new Date();
+      const nowYear = now.getFullYear(), nowMonth = now.getMonth() + 1, nowDay = now.getDate();
+
+      let elapsed, total;
+      if (goal.scope === "year") {
+        if (year !== nowYear) return null;
+        elapsed = (nowMonth - 1) * 30 + nowDay;
+        total = 365;
+      } else {
+        if (year !== nowYear || month !== nowMonth) return null;
+        elapsed = nowDay;
+        total = new Date(year, month, 0).getDate();
+      }
+
+      const expected = (goal.target * elapsed) / total;
+      const diff = current - expected;
+      if (diff >= 0) return { label: "On track", color: "#059669" };
+      if (diff >= -1) return { label: "Slightly behind", color: "#D97706" };
+      return { label: `${Math.ceil(Math.abs(diff))} behind pace`, color: "#DC2626" };
+    }
+
+    function PledgesScreen({ db, onSaveGoal, onDeleteGoal }) {
+      const currentYear = new Date().getFullYear();
+      const currentMonth = new Date().getMonth() + 1;
+      const [selectedYear, setSelectedYear] = useState(currentYear);
+      const [showAddGoal, setShowAddGoal] = useState(false);
+      const [editGoal, setEditGoal] = useState(null);
+
+      // Collect years from goals + current year
+      const goalYears = [...new Set([currentYear, ...(db.goals||[]).map(g=>g.year)])].sort((a,b)=>b-a);
+
+      const yearGoals = (db.goals||[]).filter(g => g.year === selectedYear);
+
+      // New/edit goal form state
+      const [gType, setGType] = useState("total");
+      const [gScope, setGScope] = useState("year");
+      const [gTarget, setGTarget] = useState("");
+      const [gGenre, setGGenre] = useState("");
+      const [gFormat, setGFormat] = useState("Paperback");
+      const [gBookId, setGBookId] = useState("");
+      const [gBookSearch, setGBookSearch] = useState("");
+      const [gDeadlineMonth, setGDeadlineMonth] = useState("");
+      const [gMonth, setGMonth] = useState(String(currentMonth));
+      const [gPaceTracked, setGPaceTracked] = useState(false);
+      const [gLabel, setGLabel] = useState("");
+
+      function openAdd() {
+        setGType("total"); setGScope("year"); setGTarget(""); setGGenre(""); setGFormat("Paperback");
+        setGBookId(""); setGBookSearch(""); setGDeadlineMonth(""); setGMonth(String(currentMonth));
+        setGPaceTracked(false); setGLabel(""); setEditGoal(null); setShowAddGoal(true);
+      }
+      function openEdit(goal) {
+        setGType(goal.type); setGScope(goal.scope||"year"); setGTarget(String(goal.target||""));
+        setGGenre(goal.genre||""); setGFormat(goal.format||"Paperback");
+        setGBookId(goal.bookId||""); setGBookSearch("");
+        setGDeadlineMonth(String(goal.deadlineMonth||"")); setGMonth(String(goal.month||currentMonth));
+        setGPaceTracked(!!goal.paceTracked); setGLabel(goal.label||""); setEditGoal(goal);
+        setShowAddGoal(true);
+      }
+
+      function handleSaveGoal() {
+        if (gType !== "book" && (!gTarget || isNaN(gTarget) || +gTarget < 1)) {
+          alert("Please enter a valid target number."); return;
+        }
+        if (gType === "genre" && !gGenre) { alert("Please select a genre."); return; }
+        if (gType === "book" && !gBookId) { alert("Please select a book."); return; }
+        const goal = {
+          id: editGoal?.id || `g_${Date.now()}`,
+          year: selectedYear,
+          type: gType,
+          scope: gType === "book" ? "deadline" : gScope,
+          target: gType === "book" ? 1 : +gTarget,
+          genre: gType === "genre" ? gGenre : null,
+          format: gType === "format" ? gFormat : null,
+          bookId: gType === "book" ? gBookId : null,
+          deadlineMonth: gType === "book" ? (+gDeadlineMonth||null) : null,
+          month: gScope === "month" ? +gMonth : null,
+          paceTracked: gType !== "book" && gPaceTracked,
+          label: gLabel.trim() || null,
+        };
+        onSaveGoal(goal);
+        setShowAddGoal(false);
+      }
+
+      const allGenres = [...new Set(db.books.map(b=>b.genre).filter(Boolean))].sort();
+      const filteredBooks = db.books.filter(b =>
+        b.title.toLowerCase().includes(gBookSearch.toLowerCase())
+      ).slice(0,6);
+      const selectedBookObj = db.books.find(b=>b.id===gBookId);
+
+      return <div>
+        {/* Year selector */}
+        <div style={{ display:"flex", gap:7, marginBottom:20, flexWrap:"wrap", alignItems:"center" }}>
+          <div style={{ fontFamily:"'EB Garamond',serif", fontSize:18, fontWeight:700, color:T.textDark, marginRight:4 }}>
+            Pledges for
+          </div>
+          {goalYears.map(y=>(
+            <button key={y} onClick={()=>setSelectedYear(y)}
+              style={{ padding:"5px 14px", borderRadius:20, border:"none", cursor:"pointer",
+                fontSize:12, fontWeight:600,
+                background:selectedYear===y?T.base:T.card, color:selectedYear===y?T.navText:T.textMid,
+                border:`1px solid ${selectedYear===y?T.base:T.border}` }}>{y}</button>
+          ))}
+          <Btn variant="accent" size="sm" onClick={openAdd} style={{ marginLeft:"auto" }}>+ New Pledge</Btn>
+        </div>
+
+        {/* Goal cards */}
+        {yearGoals.length === 0 ? (
+          <div style={{ textAlign:"center", padding:"50px 20px", color:T.muted }}>
+            <div style={{ fontSize:36, marginBottom:10 }}>📜</div>
+            <div style={{ fontSize:15, color:T.textMid, marginBottom:6 }}>No pledges for {selectedYear}</div>
+            <div style={{ fontSize:13 }}>Tap "+ New Pledge" to set a reading goal</div>
+          </div>
+        ) : (
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            {yearGoals.map(goal=>{
+              const pm = goal.scope === "month" ? goal.month : currentMonth;
+              const prog = goalProgress(goal, db, selectedYear, pm);
+              const pct = goal.type === "book" ? (prog.done ? 100 : 0) : Math.min(100, Math.round((prog.current/prog.target)*100));
+              const pace = paceStatus(goal, prog.current, selectedYear, pm);
+              const isOverdue = goal.type === "book" && !prog.done && goal.deadlineMonth &&
+                (selectedYear < currentYear || (selectedYear === currentYear && goal.deadlineMonth < currentMonth));
+              const isDone = pct === 100;
+
+              let goalDesc = "";
+              if (goal.type === "total") goalDesc = `Read ${goal.target} books`;
+              if (goal.type === "genre") goalDesc = `Read ${goal.target} ${goal.genre} books`;
+              if (goal.type === "format") goalDesc = `Read ${goal.target} books via ${goal.format}`;
+              if (goal.type === "book") goalDesc = prog.book?.title || "Unknown book";
+
+              const scopeLabel = goal.scope === "month" ? MONTHS_FULL[goal.month-1] :
+                goal.scope === "deadline" && goal.deadlineMonth ? `by ${MONTHS[goal.deadlineMonth-1]}` : "Year";
+
+              return (
+                <div key={goal.id} style={{ background:T.card, border:`1px solid ${isOverdue?"#FECACA":isDone?"#6EE7B7":T.border}`,
+                  borderRadius:10, padding:16, position:"relative" }}>
+                  {/* Header */}
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
+                    <div style={{ flex:1 }}>
+                      {goal.label && <div style={{ fontSize:10, fontWeight:600, color:T.muted, letterSpacing:"0.07em", marginBottom:3 }}>{goal.label.toUpperCase()}</div>}
+                      <div style={{ fontFamily:"'EB Garamond',serif", fontSize:17, fontWeight:700, color:T.textDark, lineHeight:1.3 }}>{goalDesc}</div>
+                      <div style={{ fontSize:11, color:T.muted, marginTop:3 }}>{scopeLabel} · {selectedYear}</div>
+                    </div>
+                    <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                      {isOverdue && <Badge label="OVERDUE" color="#DC2626" bg="#FEF2F2" border="#FECACA" size={9} />}
+                      {isDone && <Badge label="DONE ✓" color="#059669" bg="#ECFDF5" border="#6EE7B7" size={9} />}
+                      <button onClick={()=>openEdit(goal)}
+                        style={{ fontSize:11, padding:"4px 10px", border:`1px solid ${T.border}`,
+                          borderRadius:6, background:T.surface, color:T.textMid, cursor:"pointer" }}>Edit</button>
+                      <button onClick={()=>onDeleteGoal(goal.id)}
+                        style={{ fontSize:11, padding:"4px 10px", border:"1px solid #FECACA",
+                          borderRadius:6, background:"#FEF2F2", color:T.error, cursor:"pointer" }}>✕</button>
+                    </div>
+                  </div>
+
+                  {/* Progress bar */}
+                  {goal.type !== "book" && (
+                    <>
+                      <div style={{ height:8, borderRadius:4, background:T.surface, overflow:"hidden", marginBottom:6 }}>
+                        <div style={{ height:"100%", borderRadius:4,
+                          background: isDone ? "#059669" : pace?.color || T.accent,
+                          width:`${pct}%`, transition:"width 0.4s" }} />
+                      </div>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                        <span style={{ fontSize:11, color:T.muted }}>{prog.current} of {prog.target} books · {pct}%</span>
+                        {pace && <span style={{ fontSize:11, fontWeight:600, color:pace.color }}>{pace.label}</span>}
+                      </div>
+                    </>
+                  )}
+                  {goal.type === "book" && (
+                    <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                      <div style={{ width:4, height:32, borderRadius:2, background:prog.done?"#059669":"#E2E8F0" }} />
+                      <div style={{ fontSize:13, color:T.textMid }}>
+                        {prog.done ? "Finished ✓" : isOverdue ? "Overdue — not yet read" : "Not yet read"}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Add/Edit Goal Sheet */}
+        {showAddGoal && (
+          <div style={{ position:"fixed", inset:0, zIndex:100, display:"flex", flexDirection:"column" }}>
+            <div onClick={()=>setShowAddGoal(false)} style={{ flex:1, background:"rgba(0,0,0,0.45)" }} />
+            <div style={{ background:T.surface, borderRadius:"16px 16px 0 0", maxHeight:"90vh",
+              overflowY:"auto", animation:"slideUp 0.25s ease" }}>
+              <div style={{ display:"flex", justifyContent:"center", padding:"12px 0 4px" }}>
+                <div style={{ width:36, height:4, borderRadius:2, background:T.border }} />
+              </div>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
+                padding:"8px 20px 14px", borderBottom:`1px solid ${T.border}` }}>
+                <div style={{ fontFamily:"'EB Garamond',serif", fontSize:18, fontWeight:700, color:T.textDark }}>
+                  {editGoal ? "Edit Pledge" : "New Pledge"}
+                </div>
+                <Btn onClick={()=>setShowAddGoal(false)} variant="secondary" size="sm">✕</Btn>
+              </div>
+              <div style={{ padding:20 }}>
+                {/* Optional label */}
+                <div style={{ marginBottom:14 }}>
+                  <FieldLabel label="Label (optional)" />
+                  <input value={gLabel} onChange={e=>setGLabel(e.target.value)}
+                    placeholder="e.g. Summer reading, Fiction challenge…"
+                    style={{ width:"100%", padding:"10px 12px", border:`1px solid ${T.border}`,
+                      borderRadius:8, fontSize:14, color:T.textDark, outline:"none", background:T.card }} />
+                </div>
+
+                {/* Goal type */}
+                <div style={{ marginBottom:14 }}>
+                  <FieldLabel label="Goal type" required />
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>
+                    {GOAL_TYPES.map(t=>(
+                      <div key={t.key} onClick={()=>setGType(t.key)}
+                        style={{ padding:"7px 14px", borderRadius:20, cursor:"pointer", fontSize:12, fontWeight:600,
+                          background:gType===t.key?T.base:T.card, color:gType===t.key?T.navText:T.textMid,
+                          border:`1.5px solid ${gType===t.key?T.base:T.border}` }}>{t.label}</div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Scope (not for book type) */}
+                {gType !== "book" && (
+                  <div style={{ marginBottom:14 }}>
+                    <FieldLabel label="Scope" required />
+                    <div style={{ display:"flex", gap:7 }}>
+                      {GOAL_SCOPES.map(s=>(
+                        <div key={s.key} onClick={()=>setGScope(s.key)}
+                          style={{ padding:"7px 14px", borderRadius:20, cursor:"pointer", fontSize:12, fontWeight:600,
+                            background:gScope===s.key?T.base:T.card, color:gScope===s.key?T.navText:T.textMid,
+                            border:`1.5px solid ${gScope===s.key?T.base:T.border}` }}>{s.label}</div>
+                      ))}
+                    </div>
+                    {gScope === "month" && (
+                      <select value={gMonth} onChange={e=>setGMonth(e.target.value)}
+                        style={{ marginTop:8, width:"100%", padding:"10px 12px", border:`1px solid ${T.border}`,
+                          borderRadius:8, fontSize:14, color:T.textDark, outline:"none", background:T.card, appearance:"none" }}>
+                        {MONTHS_FULL.map((m,i)=><option key={m} value={i+1}>{m}</option>)}
+                      </select>
+                    )}
+                  </div>
+                )}
+
+                {/* Target number */}
+                {gType !== "book" && (
+                  <div style={{ marginBottom:14 }}>
+                    <FieldLabel label="Target (number of books)" required />
+                    <input value={gTarget} onChange={e=>setGTarget(e.target.value)} type="number" min="1"
+                      placeholder="e.g. 20"
+                      style={{ width:"100%", padding:"10px 12px", border:`1px solid ${T.border}`,
+                        borderRadius:8, fontSize:14, color:T.textDark, outline:"none", background:T.card }} />
+                  </div>
+                )}
+
+                {/* Genre picker */}
+                {gType === "genre" && (
+                  <div style={{ marginBottom:14 }}>
+                    <FieldLabel label="Genre" required />
+                    <select value={gGenre} onChange={e=>setGGenre(e.target.value)}
+                      style={{ width:"100%", padding:"10px 12px", border:`1px solid ${T.border}`,
+                        borderRadius:8, fontSize:14, color:gGenre?T.textDark:T.muted, outline:"none", background:T.card, appearance:"none" }}>
+                      <option value="">Select a genre…</option>
+                      {allGenres.map(g=><option key={g} value={g}>{g}</option>)}
+                    </select>
+                  </div>
+                )}
+
+                {/* Format picker */}
+                {gType === "format" && (
+                  <div style={{ marginBottom:14 }}>
+                    <FieldLabel label="Format" required />
+                    <select value={gFormat} onChange={e=>setGFormat(e.target.value)}
+                      style={{ width:"100%", padding:"10px 12px", border:`1px solid ${T.border}`,
+                        borderRadius:8, fontSize:14, color:T.textDark, outline:"none", background:T.card, appearance:"none" }}>
+                      {Object.keys(FORMAT_COLORS).map(f=><option key={f} value={f}>{f}</option>)}
+                    </select>
+                  </div>
+                )}
+
+                {/* Book picker */}
+                {gType === "book" && (
+                  <div style={{ marginBottom:14 }}>
+                    <FieldLabel label="Book" required />
+                    {selectedBookObj ? (
+                      <div style={{ display:"flex", alignItems:"center", gap:8, background:"#EFF6FF",
+                        border:"1px solid #BFDBFE", borderRadius:8, padding:"10px 12px", marginBottom:8 }}>
+                        <span style={{ fontSize:13, color:T.accent, flex:1 }}>{selectedBookObj.title}</span>
+                        <span onClick={()=>{ setGBookId(""); setGBookSearch(""); }}
+                          style={{ cursor:"pointer", color:T.muted, fontSize:14 }}>×</span>
+                      </div>
+                    ) : (
+                      <>
+                        <input value={gBookSearch} onChange={e=>setGBookSearch(e.target.value)}
+                          placeholder="Search books…"
+                          style={{ width:"100%", padding:"10px 12px", border:`1px solid ${T.border}`,
+                            borderRadius: gBookSearch ? "8px 8px 0 0" : 8,
+                            fontSize:14, color:T.textDark, outline:"none", background:T.card }} />
+                        {gBookSearch && (
+                          <div style={{ border:`1px solid ${T.border}`, borderTop:"none",
+                            borderRadius:"0 0 8px 8px", background:T.card, maxHeight:160, overflowY:"auto" }}>
+                            {filteredBooks.map(b=>(
+                              <div key={b.id} onClick={()=>{ setGBookId(b.id); setGBookSearch(""); }}
+                                style={{ padding:"9px 12px", cursor:"pointer", fontSize:13, color:T.textMid,
+                                  borderBottom:`1px solid ${T.border}` }}>{b.title}</div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {/* Deadline month */}
+                    <div style={{ marginTop:10 }}>
+                      <FieldLabel label="Deadline (optional)" />
+                      <select value={gDeadlineMonth} onChange={e=>setGDeadlineMonth(e.target.value)}
+                        style={{ width:"100%", padding:"10px 12px", border:`1px solid ${T.border}`,
+                          borderRadius:8, fontSize:14, color:gDeadlineMonth?T.textDark:T.muted,
+                          outline:"none", background:T.card, appearance:"none" }}>
+                        <option value="">No deadline</option>
+                        {MONTHS_FULL.map((m,i)=><option key={m} value={i+1}>{m} {selectedYear}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                {/* Pace tracking toggle */}
+                {gType !== "book" && (
+                  <div style={{ marginBottom:20 }}>
+                    <Toggle label="Track pace (show ahead / behind)" value={gPaceTracked} onChange={setGPaceTracked} />
+                    <div style={{ fontSize:11, color:T.muted, marginTop:5 }}>
+                      Pace tracking only shows status for the current year/month.
+                    </div>
+                  </div>
+                )}
+
+                <Btn onClick={handleSaveGoal} variant="primary" size="lg">{editGoal?"Save Changes":"Add Pledge"}</Btn>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>;
+    }
+
     // ── AUTHORS ────────────────────────────────────────────────────────────────
+
     function AuthorsScreen({ db, onSelectBook, onImport, onExport, onReset }) {
       const [search, setSearch] = useState("");
       const [showTools, setShowTools] = useState(false);
@@ -886,7 +1420,26 @@
             authors.push({id:newId,name});
             return newId;
           });
-          const bookData={...form,authorIds:resolvedIds};
+
+          // Resolve new series
+          let seriesList=[...prev.series], nextSeriesId=prev.nextSeriesId||1;
+          let resolvedSeriesId = form.seriesId;
+          if (form.seriesId && typeof form.seriesId === "string" && form.seriesId.startsWith("__newseries__")) {
+            const parts = form.seriesId.replace("__newseries__","").split("__");
+            const name = parts[0];
+            const totalCount = parts[1] ? parseInt(parts[1]) : null;
+            const ex = seriesList.find(s=>s.name.toLowerCase()===name.toLowerCase());
+            if (ex) {
+              resolvedSeriesId = ex.id;
+            } else {
+              const newId = `s_${nextSeriesId++}`;
+              seriesList.push({ id:newId, name, totalCount: totalCount||null });
+              resolvedSeriesId = newId;
+            }
+          }
+
+          const bookData={...form, authorIds:resolvedIds, seriesId:resolvedSeriesId,
+            seriesPosition: form.seriesPosition ? parseInt(form.seriesPosition) : null };
           let books, nextBookId=prev.nextBookId;
           if (bookData.id) {
             books=prev.books.map(b=>b.id===bookData.id?bookData:b);
@@ -894,7 +1447,7 @@
             const newId=`b_${nextBookId++}`;
             books=[...prev.books,{...bookData,id:newId}];
           }
-          return{...prev,authors,books,nextAuthorId,nextBookId};
+          return{...prev,authors,books,series:seriesList,nextAuthorId,nextBookId,nextSeriesId};
         });
         setSelectedBook(null); setShowAdd(false);
         showToast(form.id?"Book updated!":"Book added!");
@@ -941,7 +1494,24 @@
         showToast("All data cleared","info");
       }
 
-      const NAV=[{key:"Stacks",label:"Stacks"},{key:"Almanac",label:"Almanac"},{key:"Acquire",label:"Acquire"},{key:"Scribes",label:"Scribes"}];
+      const NAV=[{key:"Stacks",label:"Stacks"},{key:"Almanac",label:"Almanac"},{key:"Pledges",label:"Pledges"},{key:"Acquire",label:"Acquire"},{key:"Scribes",label:"Scribes"}];
+
+      const [pendingGenreFilter, setPendingGenreFilter] = useState(null);
+
+      function saveGoal(goal) {
+        setDb(prev=>{
+          const goals = prev.goals||[];
+          const exists = goals.find(g=>g.id===goal.id);
+          return { ...prev, goals: exists ? goals.map(g=>g.id===goal.id?goal:g) : [...goals,goal] };
+        });
+        showToast(goal.id?"Pledge updated!":"Pledge added!");
+      }
+
+      function deleteGoal(goalId) {
+        if (!window.confirm("Delete this pledge?")) return;
+        setDb(prev=>({ ...prev, goals:(prev.goals||[]).filter(g=>g.id!==goalId) }));
+        showToast("Pledge deleted","info");
+      }
 
       return <div style={{ height:"100vh", display:"flex", flexDirection:"column", background:T.surface }}>
         {/* Header */}
@@ -953,8 +1523,11 @@
 
         {/* Scrollable body */}
         <div style={{ flex:1, overflowY:"auto", padding:"18px 16px 20px" }}>
-          {nav==="Stacks"   && <LibraryScreen db={db} onSelectBook={setSelectedBook} />}
+          {nav==="Stacks"   && <LibraryScreen db={db} onSelectBook={setSelectedBook}
+            externalGenreFilter={pendingGenreFilter}
+            onClearExternalGenreFilter={()=>setPendingGenreFilter(null)} />}
           {nav==="Almanac"  && <DashboardScreen db={db} />}
+          {nav==="Pledges"  && <PledgesScreen db={db} onSaveGoal={saveGoal} onDeleteGoal={deleteGoal} />}
           {nav==="Scribes"  && <AuthorsScreen db={db} onSelectBook={setSelectedBook}
             onImport={importData} onExport={exportData} onReset={resetData} />}
         </div>
@@ -968,15 +1541,15 @@
               const isAdd=item.key==="Acquire";
               const active=!isAdd&&nav===item.key;
               return <button key={item.key}
-                onClick={()=>isAdd?setShowAdd(true):setNav(item.key)}
-                style={{ flex:1, padding:"14px 4px 12px", border:"none",
+                onClick={()=>{ if (isAdd) setShowAdd(true); else setNav(item.key); }}
+                style={{ flex:1, padding:"12px 4px 10px", border:"none",
                   background:"transparent", cursor:"pointer",
-                  display:"flex", flexDirection:"column", alignItems:"center", gap:6 }}>
-                <span style={{ fontFamily:"'EB Garamond',serif", fontSize:13, fontWeight:active||isAdd?700:400,
-                  letterSpacing:"0.06em", fontStyle: isAdd?"italic":"normal",
-                  color:active||isAdd?"#FFF":"rgba(255,255,255,0.45)" }}>{item.label}</span>
-                <div style={{ width:active?14:4, height:4, borderRadius:2,
-                  background:active?T.accent:isAdd?"rgba(255,255,255,0.3)":"transparent",
+                  display:"flex", flexDirection:"column", alignItems:"center", gap:5 }}>
+                <span style={{ fontFamily:"'EB Garamond',serif", fontSize:12, fontWeight:active||isAdd?700:400,
+                  letterSpacing:"0.05em", fontStyle:isAdd?"italic":"normal",
+                  color:active||isAdd?"#FFF":"rgba(255,255,255,0.4)" }}>{item.label}</span>
+                <div style={{ width:active?14:4, height:3, borderRadius:2,
+                  background:active?T.accent:isAdd?"rgba(255,255,255,0.25)":"transparent",
                   transition:"width 0.2s" }} />
               </button>;
             })}
@@ -984,9 +1557,9 @@
         </div>
 
         {/* Sheets */}
-        {selectedBook && <BookSheet book={selectedBook} allAuthors={db.authors}
+        {selectedBook && <BookSheet book={selectedBook} allAuthors={db.authors} allSeries={db.series}
           onClose={()=>setSelectedBook(null)} onSave={saveBook} onDelete={()=>deleteBook(selectedBook)} />}
-        {showAdd && <BookSheet book={{}} allAuthors={db.authors}
+        {showAdd && <BookSheet book={{}} allAuthors={db.authors} allSeries={db.series}
           onClose={()=>setShowAdd(false)} onSave={saveBook} onDelete={()=>{}} />}
 
         {/* Toast */}
